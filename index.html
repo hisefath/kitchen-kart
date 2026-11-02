@@ -1,0 +1,196 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Kitchen Kart</title>
+<style>body{margin:0;background:#0d0f17;display:grid;place-items:center;height:100vh;color:#cfd6ff;font:14px monospace}canvas{max-width:100vw;max-height:92vh}</style>
+</head><body>
+<div><canvas id="c" width="960" height="640"></canvas>
+<p>P1: WASD · P2: Arrows · Drive through ingredients, then to the glowing customer · X = trash bin clears your stack</p></div>
+<script>
+// All art drawn with canvas, all sound synthesized with WebAudio: every asset generated in code.
+const cv = document.getElementById('c'), g = cv.getContext('2d'), W = 960, H = 640;
+const ROUND = 90, MAX_STACK = 3;
+const ING = { bun: '#e0a458', patty: '#7a4a2a', cheese: '#ffd23f', lettuce: '#5fd068' };
+const NAMES = Object.keys(ING);
+
+// city: 4x3 blocks, roads between them
+const blocks = [];
+for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) blocks.push({ x: 80 + i * 220, y: 80 + j * 190, w: 140, h: 110, hue: (i * 3 + j) * 30 });
+const doors = blocks.map(b => ({ x: b.x + b.w / 2, y: b.y + b.h + 20 }));
+const stations = [
+  { x: 260, y: 230, item: 'bun' }, { x: 700, y: 230, item: 'patty' },
+  { x: 260, y: 420, item: 'cheese' }, { x: 700, y: 420, item: 'lettuce' },
+  { x: 480, y: 420, item: null }, // trash
+];
+
+let keys = {}, state = 'title', mode = 1, karts, orders, timeLeft, last = 0, floaters;
+onkeydown = e => { keys[e.code] = true; audio(); if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault(); input(e.code); };
+onkeyup = e => keys[e.code] = false;
+
+// --- leaderboard (local to this browser for v1) ---
+const board = () => { try { return JSON.parse(localStorage.kkBoard || '[]'); } catch { return []; } };
+function saveScore(name, score) {
+  const b = [...board(), { name: (name || 'anon').slice(0, 12), score }].sort((a, c) => c.score - a.score).slice(0, 10);
+  try { localStorage.kkBoard = JSON.stringify(b); } catch {}
+}
+
+function input(code) {
+  if (state === 'title' && (code === 'Digit1' || code === 'Digit2')) start(code === 'Digit1' ? 1 : 2);
+  else if (state === 'over' && code === 'Space') state = 'title';
+}
+
+function start(n) {
+  mode = n;
+  karts = [{ x: 40, y: 230, a: 0, vx: 0, vy: 0, stack: [], score: 0, color: '#ff4f9a', k: ['KeyW', 'KeyS', 'KeyA', 'KeyD'] }];
+  if (n === 2) karts.push({ x: 920, y: 420, a: Math.PI, vx: 0, vy: 0, stack: [], score: 0, color: '#3fd0ff', k: ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] });
+  orders = []; floaters = []; timeLeft = ROUND;
+  while (orders.length < 3) newOrder();
+  state = 'play';
+}
+
+function newOrder() {
+  const free = doors.filter(d => !orders.some(o => o.door === d));
+  const items = [...NAMES].sort(() => Math.random() - 0.5).slice(0, 2 + (Math.random() < 0.5));
+  orders.push({ door: free[Math.floor(Math.random() * free.length)], items, t: 25, max: 25 });
+}
+
+// --- audio ---
+let ac;
+function audio() {
+  if (ac) return;
+  ac = new AudioContext();
+  const bass = [0, 0, 7, 5, 3, 3, 10, 7]; let i = 0;
+  setInterval(() => { if (state === 'play') beep(110 * 2 ** (bass[i++ % 8] / 12), 0.12, 'square', 0.04); }, 180);
+}
+function beep(f, d, type = 'square', v = 0.1, slide = 0) {
+  if (!ac) return;
+  const o = ac.createOscillator(), a = ac.createGain(), t = ac.currentTime;
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(f * slide, t + d);
+  a.gain.setValueAtTime(v, t); a.gain.exponentialRampToValueAtTime(0.001, t + d);
+  o.connect(a).connect(ac.destination); o.start(); o.stop(t + d);
+}
+
+const near = (k, p, r) => Math.hypot(k.x - p.x, k.y - p.y) < r;
+const float = (x, y, text, color) => floaters.push({ x, y, text, color, life: 1 });
+
+function update(dt) {
+  if (state !== 'play') return;
+  timeLeft -= dt;
+  if (timeLeft <= 0) return endRound();
+
+  for (const k of karts) {
+    const [up, down, left, right] = k.k.map(c => keys[c] ? 1 : 0);
+    const dx = Math.cos(k.a), dy = Math.sin(k.a);
+    const fwd = k.vx * dx + k.vy * dy;
+    k.a += (right - left) * 0.065 * Math.max(-1, Math.min(1, fwd / 3));
+    k.vx += dx * (up * 0.28 - down * 0.18); k.vy += dy * (up * 0.28 - down * 0.18);
+    // grip: pull velocity toward heading; low grip = drifty
+    const f2 = k.vx * Math.cos(k.a) + k.vy * Math.sin(k.a);
+    k.vx += (Math.cos(k.a) * f2 - k.vx) * 0.12; k.vy += (Math.sin(k.a) * f2 - k.vy) * 0.12;
+    k.vx *= 0.975; k.vy *= 0.975;
+    const sp = Math.hypot(k.vx, k.vy); if (sp > 6) { k.vx *= 6 / sp; k.vy *= 6 / sp; }
+    k.x += k.vx; k.y += k.vy;
+    // bounce off buildings and walls
+    for (const b of blocks) {
+      const cx = Math.max(b.x, Math.min(k.x, b.x + b.w)), cy = Math.max(b.y, Math.min(k.y, b.y + b.h));
+      const d = Math.hypot(k.x - cx, k.y - cy);
+      if (d < 12) { const nx = (k.x - cx) / (d || 1), ny = (k.y - cy) / (d || 1); k.x = cx + nx * 12; k.y = cy + ny * 12; k.vx *= -0.4; k.vy *= -0.4; }
+    }
+    if (k.x < 12 || k.x > W - 12) { k.x = Math.max(12, Math.min(W - 12, k.x)); k.vx *= -0.5; }
+    if (k.y < 12 || k.y > H - 12) { k.y = Math.max(12, Math.min(H - 12, k.y)); k.vy *= -0.5; }
+
+    for (const s of stations) {
+      if (!near(k, s, 26)) { s['in' + karts.indexOf(k)] = false; continue; }
+      if (s['in' + karts.indexOf(k)]) continue; // only trigger on entering
+      s['in' + karts.indexOf(k)] = true;
+      if (!s.item) { if (k.stack.length) { k.stack = []; beep(150, 0.2, 'sawtooth', 0.08, 0.5); } }
+      else if (k.stack.length < MAX_STACK && !k.stack.includes(s.item)) { k.stack.push(s.item); beep(500 + k.stack.length * 150, 0.1); }
+    }
+    for (const o of orders) {
+      if (near(k, o.door, 28) && o.items.every(i => k.stack.includes(i))) {
+        const pts = 100 + Math.round(o.t * 4) + (o.items.length === 3 ? 50 : 0);
+        k.score += pts; k.stack = []; o.done = true;
+        float(o.door.x, o.door.y, '+' + pts, k.color);
+        [660, 880, 1100].forEach((f, i) => setTimeout(() => beep(f, 0.12, 'triangle', 0.12), i * 70));
+      }
+    }
+  }
+  for (const o of orders) { o.t -= dt; if (o.t <= 0 && !o.done) { o.done = true; float(o.door.x, o.door.y, 'too slow!', '#ff6b6b'); beep(120, 0.4, 'sawtooth', 0.08, 0.5); } }
+  orders = orders.filter(o => !o.done);
+  while (orders.length < 3) newOrder();
+  floaters.forEach(f => { f.y -= 0.6; f.life -= dt; }); floaters = floaters.filter(f => f.life > 0);
+}
+
+function endRound() {
+  state = 'over';
+  // prompt() is the lazy native name input; fine for v1
+  karts.forEach((k, i) => saveScore(prompt(`${mode === 2 ? 'Player ' + (i + 1) : 'You'} scored ${k.score}! Name for the leaderboard:`), k.score));
+}
+
+// --- drawing ---
+function dot(x, y, item, r = 6) { g.fillStyle = ING[item]; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill(); g.strokeStyle = '#0008'; g.stroke(); }
+function drawCity(t) {
+  g.fillStyle = '#1b1e2b'; g.fillRect(0, 0, W, H);
+  g.strokeStyle = '#ffffff22'; g.setLineDash([14, 14]); g.lineWidth = 2;
+  for (const y of [40, 230, 420, 605]) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+  for (const x of [40, 260, 480, 700, 920]) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+  g.setLineDash([]);
+  for (const b of blocks) {
+    g.fillStyle = `hsl(${b.hue},45%,22%)`; g.fillRect(b.x, b.y, b.w, b.h);
+    g.fillStyle = `hsl(${b.hue},70%,55%)`; g.fillRect(b.x, b.y, b.w, 6);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 2; j++) { g.fillStyle = (i + j + b.hue) % 3 ? '#ffe9a855' : '#ffffff11'; g.fillRect(b.x + 14 + i * 32, b.y + 22 + j * 36, 18, 22); }
+  }
+  for (const s of stations) {
+    g.fillStyle = s.item ? ING[s.item] + '44' : '#ff4f4f33'; g.beginPath(); g.arc(s.x, s.y, 26 + Math.sin(t / 300) * 2, 0, 7); g.fill();
+    if (s.item) dot(s.x, s.y, s.item, 10); else { g.strokeStyle = '#ff6b6b'; g.lineWidth = 4; g.beginPath(); g.moveTo(s.x - 8, s.y - 8); g.lineTo(s.x + 8, s.y + 8); g.moveTo(s.x + 8, s.y - 8); g.lineTo(s.x - 8, s.y + 8); g.stroke(); g.lineWidth = 2; }
+  }
+}
+function drawOrders(t) {
+  for (const o of orders) {
+    const { x, y } = o.door, urgent = o.t < 8;
+    g.fillStyle = urgent && Math.sin(t / 80) > 0 ? '#ff6b6b55' : '#fff3';
+    g.beginPath(); g.arc(x, y, 28, 0, 7); g.fill();
+    g.fillStyle = '#0d0f17ee'; g.fillRect(x - 32, y - 58, 64, 30);
+    o.items.forEach((it, i) => dot(x - (o.items.length - 1) * 9 + i * 18, y - 45, it));
+    g.fillStyle = urgent ? '#ff6b6b' : '#5fd068'; g.fillRect(x - 30, y - 32, 60 * (o.t / o.max), 3);
+  }
+}
+function drawKart(k) {
+  g.save(); g.translate(k.x, k.y); g.rotate(k.a);
+  g.fillStyle = '#000a'; g.fillRect(-13, -9, 28, 20);
+  g.fillStyle = k.color; g.fillRect(-14, -10, 28, 20);
+  g.fillStyle = '#fff'; g.fillRect(6, -7, 6, 14);
+  g.fillStyle = '#111'; [[-12, -12], [-12, 9], [6, -12], [6, 9]].forEach(([x, y]) => g.fillRect(x, y, 7, 3));
+  g.restore();
+  k.stack.forEach((it, i) => dot(k.x, k.y - 18 - i * 9, it, 5));
+}
+function drawBoard(y) {
+  g.textAlign = 'center'; g.fillStyle = '#ffd23f'; g.font = '20px monospace'; g.fillText('🏆 LEADERBOARD', W / 2, y);
+  g.font = '16px monospace'; g.fillStyle = '#cfd6ff';
+  board().forEach((e, i) => g.fillText(`${String(i + 1).padStart(2)}. ${e.name.padEnd(12)} ${String(e.score).padStart(5)}`, W / 2, y + 28 + i * 22));
+}
+
+function draw(t) {
+  drawCity(t);
+  if (state === 'play') {
+    drawOrders(t); karts.forEach(drawKart);
+    floaters.forEach(f => { g.globalAlpha = Math.max(0, f.life); g.fillStyle = f.color; g.font = 'bold 22px monospace'; g.textAlign = 'center'; g.fillText(f.text, f.x, f.y); g.globalAlpha = 1; });
+    g.textAlign = 'left'; g.font = 'bold 20px monospace';
+    karts.forEach((k, i) => { g.fillStyle = k.color; g.fillText(`P${i + 1}: ${k.score}`, 12 + i * 150, 26); });
+    g.textAlign = 'right'; g.fillStyle = timeLeft < 10 ? '#ff6b6b' : '#fff'; g.fillText(Math.ceil(timeLeft) + 's', W - 12, 26);
+    return;
+  }
+  g.fillStyle = '#0d0f17cc'; g.fillRect(0, 0, W, H); g.textAlign = 'center';
+  if (state === 'title') {
+    g.fillStyle = '#ff4f9a'; g.font = 'bold 56px monospace'; g.fillText('KITCHEN KART', W / 2, 110);
+    g.fillStyle = '#fff'; g.font = '20px monospace'; g.fillText('Press 1 for solo · 2 for versus', W / 2, 160);
+  } else {
+    g.fillStyle = '#fff'; g.font = 'bold 40px monospace';
+    const best = Math.max(...karts.map(k => k.score));
+    g.fillText(mode === 2 ? (karts[0].score === karts[1].score ? 'TIE!' : `P${karts.findIndex(k => k.score === best) + 1} WINS!`) : `SCORE ${best}`, W / 2, 110);
+    g.font = '20px monospace'; g.fillText('Space for menu', W / 2, 150);
+  }
+  drawBoard(230);
+}
+
+(function loop(t) { const dt = Math.min(0.05, (t - last) / 1000); last = t; update(dt); draw(t); requestAnimationFrame(loop); })(0);
+</script></body></html>

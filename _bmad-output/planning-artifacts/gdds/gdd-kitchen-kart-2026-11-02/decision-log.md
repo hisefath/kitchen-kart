@@ -1,0 +1,7 @@
+# Kitchen Kart GDD — Decision Log
+
+- 2026-11-02 — GDD created (Create intent, Express mode). Input: final game brief.
+- 2026-11-02 — Game type: **Racing** (signals: kart, drift, vehicle, Game Week "Multiplayer Racing" genre). Party Game considered (local MP, casual) but it's minigame-based; racing guide used, with local-MP conventions folded in.
+- 2026-11-02 — User pre-approved all recommendations ("go with all the defaults"). Resolved: **90 s rounds**; scoring **(100 + speed bonus) × streak (×1/×1.5/×2)**; ram **drops top item + 1 s shield**; **drift boost** (hold drift key).
+- 2026-11-02 — Facilitator calls under pre-approval: per-order plan beat = 1.5 s telegraph (karts keep moving; full 3 s freeze only at round start); key item copies N−1 rule; 40% faders; stacks carry over; identical kart stats; no rubber-banding; one bot difficulty; drift on Shift keys; Supabase w/ local fallback.
+- 2026-11-02 — Finalize: decision log audited (all entries in gdd.md); brief reconciled (vision, pillars, modes, art, audio, scarcity, hoard, ram, two boards all present); remaining [ASSUMPTION]s: Supabase project creds (needs user), Micro Machines ref. Editorial polish skills not installed — polished inline. **Status: final.** Next: gds-game-architecture.
