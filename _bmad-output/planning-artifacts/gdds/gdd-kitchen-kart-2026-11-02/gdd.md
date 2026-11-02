@@ -236,6 +236,11 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 
 ### Game Modes
 
+**Menu flow:** Title → Mode → Garage (4 pages) → match.
+- **Title:** the logo, **PLAY** and **HOW TO PLAY**, and nothing else. Behind them, 4 CPU karts play a silent, slow (×0.5 speed) attract round on the selected map.
+- **Mode:** two large buttons, **VS BOTS** and **MULTIPLAYER**, plus BACK.
+- **Garage:** see Vehicle Roster. The rival count lives on its Ready page. A manila-folder **LEADERBOARD tab** at the bottom of every garage page (or the L key) slides up a sheet with that mode's all-time top 10, highlights your saved name, and shows your best score on this laptop. The sheet blocks the page behind it until it's closed.
+
 0. **Demo (How to Play):** a guided walkthrough from the title screen (button, or key 3 / H).
    - **Explainer cards**, with the world paused and the target spotlit, one at a time: your kart, the order ticket and its ★ key item, the item landing shadows, then the customer ring. Space or a click advances; each card also moves on by itself after 6 s.
    - **Autopilot:** the bot AI drives P1 while live callouts react to grabbing an item, completing the order and delivering. The rivals drive at ×0.7 and can't pick up items or ram, so the walkthrough always finishes.

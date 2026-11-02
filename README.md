@@ -10,9 +10,9 @@ Then open http://localhost:8124. Add `?test` to the URL to run the self-check; t
 
 **Controls**
 - Hold a direction and the kart drives that way. P1 uses WASD with Left Shift to drift; P2 uses the arrow keys with Right Shift or `/` to drift.
-- Press `3` (or click HOW TO PLAY) on the title screen for a guided demo.
-- Gamepads: press any button on the title screen to join as P3 or P4.
-- On the title screen, press `1` for Vs Bots (A or D changes the bot count) or `2` for Party (F toggles bot fill).
+- **Title:** press PLAY (or Enter), or HOW TO PLAY (or H) for a guided demo.
+- **Mode:** choose VS BOTS (key 1) or MULTIPLAYER (key 2). Gamepads join as P3 and P4 by pressing any button here.
+- **Garage:** four pages: Car → Map → Menu → Ready. Enter goes to the next page and Esc goes back. Press L, or click the tab at the bottom, to slide up the leaderboard.
 
 ## Put it online (GitHub Pages)
 1. Create a public GitHub repo and push this folder to it.

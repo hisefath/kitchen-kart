@@ -157,9 +157,16 @@ function padButton(i, n) {
   audio();
   if (state === 'title') {
     if (!pads.includes(i) && pads.length < 2) { pads.push(i); sfx.join(); }
-    else if (n === 9) openSetup('party');
+    else if (n === 0 || n === 9) openModes();
+    else if (n === 2) begin('demo');
+  } else if (state === 'modes') {
+    if (!pads.includes(i) && pads.length < 2) { pads.push(i); sfx.join(); }
     else if (n === 0) openSetup('bots');
-  } else if (state === 'setup') {
+    else if (n === 2 || n === 9) openSetup('party');
+    else if (n === 1) { state = 'title'; sfx.join(); }
+  } else if (state === 'setup' && n === 3) lb.open = !lb.open;
+  else if (state === 'setup' && lb.open) { if (n === 1) lb.open = false; }
+  else if (state === 'setup') {
     if (!pads.includes(i) && pads.length < 2 && cfg.mode === 'party') { pads.push(i); sfx.join(); return; }
     const slot = cfg.mode === 'bots' ? 0 : 2 + pads.indexOf(i);
     const lr = n === 15 ? 1 : n === 14 ? -1 : 0, ud = n === 13 ? 1 : n === 12 ? -1 : 0;
@@ -184,8 +191,9 @@ function audio() {
   const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   music();
 }
+let muted = false; // the title-screen attract mode plays silently
 function beep(f, d, type = 'square', v = 0.1, slide = 0, delay = 0) {
-  if (!ac) return;
+  if (!ac || muted) return;
   const o = ac.createOscillator(), a = ac.createGain(), t = ac.currentTime + delay;
   o.type = type; o.frequency.setValueAtTime(f, t);
   if (slide) o.frequency.exponentialRampToValueAtTime(f * slide, t + d);
@@ -193,7 +201,7 @@ function beep(f, d, type = 'square', v = 0.1, slide = 0, delay = 0) {
   o.connect(a).connect(master); o.start(t); o.stop(t + d);
 }
 function noise(d, v, freq = 800) {
-  if (!ac) return;
+  if (!ac || muted) return;
   const s = ac.createBufferSource(), f = ac.createBiquadFilter(), a = ac.createGain(), t = ac.currentTime;
   s.buffer = noiseBuf; f.type = 'lowpass'; f.frequency.value = freq;
   a.gain.setValueAtTime(v, t); a.gain.exponentialRampToValueAtTime(0.001, t + d);
@@ -270,12 +278,22 @@ function begin(mode) {
   state = 'count';
 }
 const rematch = () => { submitEntries(); begin(cfg.mode === 'demo' ? 'bots' : cfg.mode); };
-const toMenu = () => { submitEntries(); demo = null; state = 'title'; loadBoards(); };
+const toMenu = () => { submitEntries(); state = 'title'; startAttract(); loadBoards(); };
+const attracting = () => state === 'title' || state === 'modes';
+function startAttract() { // 4 CPU karts lazily playing behind the title screen
+  demo = null; lb.open = false;
+  karts = [0, 1, 2, 3].map(n => Object.assign(makeKart(n, false), { color: CAR_COLORS[n], style: n % 3 }));
+  const spots = [];
+  for (const k of karts) { const p = roadPoint(spots, 150); spots.push(p); Object.assign(k, p); }
+  now = COUNT; items = []; parts = []; floaters = []; lastWinner = null; lastShop = null;
+  newOrder(false);
+}
+const openModes = () => { state = 'modes'; sfx.join(); };
 const humanSlots = () => cfg.mode === 'bots' ? [0] : [0, 1, ...pads.slice(0, 2).map((_, i) => 2 + i)];
-function openSetup(mode) { cfg.mode = mode; cfg.step = 0; state = 'setup'; sfx.join(); }
+function openSetup(mode) { cfg.mode = mode; cfg.step = 0; lb.open = false; state = 'setup'; loadBoards(); sfx.join(); }
 const STEPS = ['CAR', 'MAP', 'MENU', 'READY'];
 const nextStep = () => { if (cfg.step < STEPS.length - 1) { cfg.step++; sfx.join(); } else ready(); };
-const backStep = () => { if (cfg.step > 0) { cfg.step--; sfx.join(); } else state = 'title'; };
+const backStep = () => { if (cfg.step > 0) { cfg.step--; sfx.join(); } else { state = 'modes'; sfx.join(); } };
 const cycleMap = dir => { useMap((cfg.map + dir + MAPS.length) % MAPS.length); sfx.join(); };
 function ready() { ls.set('kkMap', cfg.map); cfg.cars.forEach((c, n) => ls.set('kkCar' + n, c)); begin(cfg.mode); }
 function pickColor(n, dir) { // skip colors another human already has
@@ -304,6 +322,7 @@ function newOrder(first) {
 
 // --- update ---
 function update() {
+  if (attracting()) { muted = true; now += STEP; playStep(); muted = false; return; }
   if (state !== 'count' && state !== 'play') return;
   if (demo && TOUR[demo.i] && TOUR[demo.i].hold) { // walkthrough card: world paused until read
     if ((demo.t += STEP) > 6) nextTip();
@@ -318,6 +337,9 @@ function update() {
   }
   if (now >= COUNT + ROUND) return endRound();
   if (timeLeft() < 5 && Math.ceil(timeLeft()) !== lastTick) { lastTick = Math.ceil(timeLeft()); sfx.tick(); }
+  playStep();
+}
+function playStep() { // one tick of the live world: spawns, driving, contact, pickups, deliveries
 
   // second (scarce) key-item drop
   if (!order.extraDone && now >= order.extraAt - TELE) {
@@ -364,7 +386,7 @@ function drive(k, inp) {
   const grip = k.drifting ? 0.04 : MAPS[cfg.map].grip, c = Math.cos(k.a), s = Math.sin(k.a), f2 = k.vx * c + k.vy * s;
   k.vx += (c * f2 - k.vx) * grip; k.vy += (s * f2 - k.vy) * grip;
   k.vx *= 0.975; k.vy *= 0.975;
-  const cap = MAX_SPEED * (k.boost > 0 ? BOOST_MULT : 1) * (k.bot ? (demo && demo.auto ? 0.7 : BOT_SPEED) : 1), sp = Math.hypot(k.vx, k.vy);
+  const cap = MAX_SPEED * (k.boost > 0 ? BOOST_MULT : 1) * (k.bot ? (attracting() ? 0.5 : demo && demo.auto ? 0.7 : BOT_SPEED) : 1), sp = Math.hypot(k.vx, k.vy);
   if (sp > cap) { k.vx *= cap / sp; k.vy *= cap / sp; }
   k.boost -= STEP; k.shield -= STEP; k.ramCool -= STEP; k.fullT -= STEP; k.pop -= STEP;
   if (k.boost > 0 && Math.random() < 0.5) parts.push({ x: k.x - dx * 14, y: k.y - dy * 14, vx: -dx + rand(-0.5, 0.5), vy: -dy + rand(-0.5, 0.5), life: 0.4, max: 0.4, color: '#ffffff', r: 5 });
@@ -395,7 +417,7 @@ function collideKarts() {
   }
 }
 function ram(r, v, nx, ny) {
-  sfx.ram(); shake = 0.15; r.ramCool = 3; puff((r.x + v.x) / 2, (r.y + v.y) / 2, '#ffffff', 10); // ramCool: bots back off so carriers can escape
+  sfx.ram(); if (!muted) shake = 0.15; r.ramCool = 3; puff((r.x + v.x) / 2, (r.y + v.y) / 2, '#ffffff', 10); // ramCool: bots back off so carriers can escape
   if (v.shield > 0 || !v.stack.length) return;
   const type = v.stack.pop(); v.shield = SHIELD; sfx.drop();
   let p;
@@ -469,7 +491,7 @@ function waypoint(k, t) {
   return a.gx !== b.gx ? nodeAt(a.gx + Math.sign(b.gx - a.gx), a.gy) : nodeAt(a.gx, a.gy + Math.sign(b.gy - a.gy));
 }
 function botInput(k) {
-  if (state !== 'play') return { gas: 0, brake: 0, steer: 0, drift: false };
+  if (state !== 'play' && !attracting()) return { gas: 0, brake: 0, steer: 0, drift: false };
   if ((k.think -= STEP) <= 0 || (k.target && k.target.type && !items.includes(k.target))) { k.think = 0.25; botThink(k); }
   const wp = waypoint(k, k.target || order.shop.door);
   let diff = Math.atan2(wp.y - k.y, wp.x - k.x) - k.a;
@@ -503,11 +525,15 @@ onkeydown = e => {
   if (e.repeat && e.code !== 'Backspace') return;
   keys[e.code] = true;
   if (state === 'title') {
-    if (e.code === 'Digit1' || e.code === 'Space' || e.code === 'Enter') openSetup('bots');
-    else if (e.code === 'Digit2') openSetup('party');
-    else if (e.code === 'Digit3' || e.code === 'KeyH') begin('demo');
-    else if (e.code === 'KeyF') { cfg.fill = !cfg.fill; sfx.join(); }
-  } else if (state === 'setup') {
+    if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyP') openModes();
+    else if (e.code === 'KeyH' || e.code === 'KeyD') begin('demo');
+  } else if (state === 'modes') {
+    if (e.code === 'Digit1' || e.code === 'KeyB') openSetup('bots');
+    else if (e.code === 'Digit2' || e.code === 'KeyM') openSetup('party');
+    else if (e.code === 'Escape' || e.code === 'Backspace') { state = 'title'; sfx.join(); }
+  } else if (state === 'setup' && (e.code === 'KeyL' || (lb.open && e.code === 'Escape'))) { lb.open = !lb.open; sfx.join(); }
+  else if (state === 'setup' && lb.open) { /* leaderboard sheet is up: ignore other keys */ }
+  else if (state === 'setup') {
     const solo = cfg.mode === 'bots', c = e.code, st = cfg.step;
     const lr = c === 'KeyD' || c === 'ArrowRight' ? 1 : c === 'KeyA' || c === 'ArrowLeft' ? -1 : 0;
     if (c === 'Enter' || c === 'Space') nextStep();
@@ -533,13 +559,12 @@ onkeydown = e => {
 };
 onkeyup = e => { keys[e.code] = false; if (!e.shiftKey) keys.ShiftLeft = keys.ShiftRight = false; };
 onblur = () => { for (const k in keys) keys[k] = false; };
-const BTN = { bots: [130, 196, 330, 156], party: [500, 196, 330, 156], demo: [330, 362, 300, 36], exit: [W - 178, H + HUD - 48, 164, 36] };
+const BTN = { exit: [W - 178, H + HUD - 48, 164, 36] };
 const hit = (b, x, y) => x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3];
 onpointerdown = e => {
   audio();
   const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) * cv.width / r.width, y = (e.clientY - r.top) * cv.height / r.height;
-  if (state === 'title') { if (hit(BTN.bots, x, y)) openSetup('bots'); else if (hit(BTN.party, x, y)) openSetup('party'); else if (hit(BTN.demo, x, y)) begin('demo'); }
-  else if (state === 'setup') { const b = clicks.find(c => hit(c.r, x, y)); if (b) b.fn(); }
+  if (state === 'title' || state === 'modes' || state === 'setup') { const b = clicks.find(c => hit(c.r, x, y)); if (b) b.fn(); }
   else if (demo && (state === 'count' || state === 'play')) { if (hit(BTN.exit, x, y)) toMenu(); else if (TOUR[demo.i] && TOUR[demo.i].hold) nextTip(); }
 };
 
@@ -835,30 +860,74 @@ function drawBoard(title, list, x, y, hi) {
   });
 }
 
+function bigButton(x, y, w, h, label, color, fn, size = 30, sub) {
+  const hov = 1 + Math.sin(performance.now() / 260) * 0.015;
+  g.save(); g.translate(x + w / 2, y + h / 2); g.scale(hov, hov);
+  rr(-w / 2, -h / 2 + 6, w, h, 22, shade(color, -0.3)); rr(-w / 2, -h / 2, w, h, 22, color);
+  text(label, 0, sub ? -4 : size * 0.36, size, ink(color) === '#ffffff' ? '#fff' : '#1d2033', 'center', ink(color) === '#ffffff');
+  if (sub) { g.fillStyle = ink(color); g.globalAlpha = 0.8; g.font = '15px system-ui, sans-serif'; g.textAlign = 'center'; g.fillText(sub, 0, 26); g.globalAlpha = 1; }
+  g.restore(); button(x, y, w, h + 6, fn);
+}
 function drawTitle(t) {
-  g.fillStyle = '#1d2033b0'; g.fillRect(0, 0, W, H + HUD);
-  const bob = Math.sin(t / 300) * 4;
-  text('KITCHEN KART', W / 2, 92 + bob, 72, '#ff4f9a');
-  text('Race toy karts for scarce food. Ram rivals. Deliver first.', W / 2, 130, 18, '#ffffff', 'center', false);
-  ['burger', 'fries', 'shake', 'ketchup'].forEach((it, i) => drawItem(it, W / 2 - 75 + i * 50, 165 + Math.sin(t / 200 + i) * 4, 1.3));
-  // menu cards
-  rr(130, 196, 330, 156, 16, '#ff4f9a'); rr(500, 196, 330, 156, 16, '#3fd0ff');
-  text('1  VS BOTS', 295, 234, 30, '#fff');
-  text('race 1-3 CPU karts', 295, 272, 20, '#fff', 'center', false);
-  text('pick your car + map next', 295, 298, 14, '#ffffffcc', 'center', false);
-  text('WASD or arrows · Shift = drift', 295, 334, 15, '#fff', 'center', false);
-  text('2  PARTY', 665, 234, 30, '#fff');
-  const humans = 2 + Math.min(2, pads.length);
-  text(`${humans} players${cfg.fill ? ' + bots fill to 4' : ''}`, 665, 270, 18, '#fff', 'center', false);
-  text(`F: bots ${cfg.fill ? 'ON' : 'OFF'} · gamepad: press any button to join`, 665, 296, 13, '#ffffffcc', 'center', false);
-  text('P1 WASD+LShift · P2 arrows+RShift', 665, 334, 15, '#fff', 'center', false);
-  const [dx, dy, dw, dh] = BTN.demo, glow = 0.5 + Math.sin(t / 250) * 0.5;
-  rr(dx - glow * 3, dy - glow * 3, dw + glow * 6, dh + glow * 6, 20, '#ffd23f55'); rr(dx, dy, dw, dh, 18, '#ffd23f');
-  text('▶  3  HOW TO PLAY (DEMO)', W / 2, dy + 25, 18, '#1d2033', 'center', false);
-  drawBoard('🏆 VS BOTS · ALL-TIME', boards.bots, 295, 440, null);
-  drawBoard('🏆 MULTIPLAYER · ALL-TIME', boards.multi, 665, 440, null);
-  g.fillStyle = '#ffffff66'; g.font = '12px system-ui'; g.textAlign = 'center';
-  g.fillText(online ? 'online leaderboards' : 'leaderboards saved on this laptop (online board not configured)', W / 2, H + HUD - 10);
+  clicks = [];
+  const fade = g.createLinearGradient(0, 0, 0, H + HUD); fade.addColorStop(0, '#1d2033cc'); fade.addColorStop(0.55, '#1d203355'); fade.addColorStop(1, '#1d2033aa');
+  g.fillStyle = fade; g.fillRect(0, 0, W, H + HUD);
+  const bob = Math.sin(t / 380) * 5;
+  text('KITCHEN', W / 2, 190 + bob, 96, '#ffd23f');
+  text('KART', W / 2, 284 + bob, 110, '#ff4f9a');
+  text('race toy karts · grab the food · deliver first', W / 2, 330, 18, '#ffffff', 'center', true);
+  bigButton(W / 2 - 160, 380, 320, 86, '▶  PLAY', '#5fd068', openModes, 40);
+  bigButton(W / 2 - 130, 494, 260, 58, 'HOW TO PLAY', '#ffd23f', () => begin('demo'), 22);
+  g.fillStyle = '#ffffff88'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
+  g.fillText('Enter: play  ·  H: how to play', W / 2, 690);
+}
+function drawModes(t) {
+  clicks = [];
+  g.fillStyle = '#1d2033d8'; g.fillRect(0, 0, W, H + HUD);
+  text('HOW DO YOU WANT TO PLAY?', W / 2, 130, 34, '#ffd23f');
+  [['bots', 'VS BOTS', 'Just you vs 1-3 CPU karts', '#ff4f9a', 110], ['party', 'MULTIPLAYER', '2-4 players on one laptop', '#3fd0ff', 510]].forEach(([mode, label, sub, color, x], i) => {
+    const y = 180, w = 340, h = 300, lift = Math.sin(t / 400 + i) * 3;
+    rr(x, y + 8, w, h, 26, shade(color, -0.3)); rr(x, y + lift, w, h, 26, color);
+    g.save(); g.translate(x + w / 2 - (i ? 40 : 0), y + 110 + lift); g.scale(3, 3); g.rotate(-0.3); drawCar(i ? '#ffd23f' : '#ffffff', i ? 2 : 0); g.restore();
+    if (i) { g.save(); g.translate(x + w / 2 + 50, y + 120 + lift); g.scale(3, 3); g.rotate(-0.3); drawCar('#5fd068', 1); g.restore(); }
+    text(label, x + w / 2, y + 220 + lift, 34, '#fff');
+    g.fillStyle = '#1d2033'; g.font = 'bold 16px system-ui, sans-serif'; g.textAlign = 'center'; g.fillText(sub, x + w / 2, y + 256 + lift);
+    button(x, y, w, h + 8, () => openSetup(mode));
+  });
+  g.fillStyle = '#ffffff88'; g.font = '13px system-ui'; g.textAlign = 'center'; g.fillText('1 or 2 to choose  ·  gamepads: press a button to join', W / 2, 540);
+  rr(40, 620, 150, 54, 16, '#2b2d42'); text('◀ BACK', 115, 654, 18, '#fff', 'center', false); button(40, 620, 150, 54, () => { state = 'title'; sfx.join(); });
+}
+
+// --- leaderboard sheet: a folder tab at the bottom of the garage that slides up ---
+const lb = { open: false, p: 0 };
+function drawLeaderTab(t) {
+  lb.p += ((lb.open ? 1 : 0) - lb.p) * 0.2;
+  const e = 1 - (1 - lb.p) ** 3, sheetH = 470, top = H + HUD - 38 - sheetH * e;
+  const board = cfg.mode === 'bots' ? 'bots' : 'multi', paper = '#f6e3b4', edge = '#d9bd7c';
+  if (lb.open) clicks = []; // sheet is modal: only the tab responds
+  if (lb.p > 0.01) { g.fillStyle = `rgba(29,32,51,${0.65 * e})`; g.fillRect(0, 0, W, H + HUD); }
+  const tw = 300, tx = W / 2 - tw / 2;
+  g.beginPath(); g.moveTo(tx, top + 40); g.lineTo(tx + 22, top + 6); g.quadraticCurveTo(tx + 26, top, tx + 34, top);
+  g.lineTo(tx + tw - 34, top); g.quadraticCurveTo(tx + tw - 26, top, tx + tw - 22, top + 6); g.lineTo(tx + tw, top + 40); g.closePath();
+  g.fillStyle = paper; g.fill(); g.strokeStyle = edge; g.lineWidth = 2; g.stroke();
+  rr(30, top + 38, W - 60, sheetH + 60, 18, paper); g.strokeStyle = edge; g.beginPath(); g.roundRect(30, top + 38, W - 60, sheetH + 60, 18); g.stroke();
+  rr(tx + 2, top + 30, tw - 4, 12, 0, paper); // join tab to sheet seamlessly
+  text(`🏆 ${board === 'bots' ? 'VS BOTS' : 'MULTIPLAYER'} LEADERBOARD ${lb.open ? '▼' : '▲'}`, W / 2, top + 28, 15, '#2b2d42', 'center', false);
+  button(tx, top, tw, 42, () => { lb.open = !lb.open; sfx.join(); });
+  if (lb.p < 0.05) return;
+  const list = boards[board], me = ls.get('kkName0', ''), y0 = top + 96;
+  text('ALL-TIME TOP 10', W / 2, top + 76, 22, '#2b2d42', 'center', false);
+  if (!list.length) { g.fillStyle = '#2b2d4299'; g.font = '16px system-ui'; g.textAlign = 'center'; g.fillText('No scores yet. Be the first!', W / 2, y0 + 60); }
+  list.slice(0, 10).forEach((r, i) => {
+    const y = y0 + i * 32, mine = me && r.name === me;
+    if (i % 2 === 0) rr(W / 2 - 260, y, 520, 30, 8, '#00000010');
+    if (mine) rr(W / 2 - 260, y, 520, 30, 8, '#ff4f9a33');
+    g.font = 'bold 17px ui-monospace, monospace'; g.fillStyle = i < 3 ? ['#c99700', '#8a8f99', '#b06a33'][i] : '#2b2d42';
+    g.textAlign = 'left'; g.fillText(`${i + 1}.`, W / 2 - 240, y + 21); g.fillStyle = '#2b2d42'; g.fillText(r.name, W / 2 - 190, y + 21);
+    g.textAlign = 'right'; g.fillText(r.score, W / 2 + 240, y + 21);
+  });
+  g.fillStyle = '#2b2d42aa'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
+  g.fillText(`Your best on this laptop: ${ls.get('kkPB_' + board, 0)}  ·  ${online ? 'online board' : 'saved on this laptop'}  ·  L or click the tab to close`, W / 2, y0 + 345);
 }
 
 let clicks = []; // garage hit areas, rebuilt every frame
@@ -881,7 +950,8 @@ function drawSetup(t) {
     button(W - 230, 614, 190, 62, nextStep);
   }
   g.fillStyle = '#ffffff77'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
-  g.fillText(`Enter / Space: ${cfg.step < STEPS.length - 1 ? 'next' : 'start'}  ·  Esc: back`, W / 2, 652);
+  g.fillText(`Enter / Space: ${cfg.step < STEPS.length - 1 ? 'next' : 'start'}  ·  Esc: back  ·  L: leaderboard`, W / 2, 604);
+  drawLeaderTab(t);
 }
 function setupCar(t) {
   text('CHOOSE YOUR RIDE', W / 2, 104, 34, '#ffd23f');
@@ -1012,7 +1082,7 @@ function draw(t) {
   if (shake > 0) g.translate(rand(-6, 6) * shake / 0.15, rand(-6, 6) * shake / 0.15);
   g.drawImage(mapCache, 0, HUD);
   g.save(); g.translate(0, HUD);
-  if (state !== 'title' && state !== 'setup') {
+  if (state !== 'setup') {
     drawDoor(t); drawItems(t);
     karts.forEach(k => drawKart(k, t));
     for (const p of parts) { g.globalAlpha = clamp(p.life / p.max, 0, 1); if (p.sq) { g.fillStyle = p.color; g.fillRect(p.x, p.y, p.r * 2, p.r); } else circle(p.x, p.y, p.r, p.color); }
@@ -1021,7 +1091,7 @@ function draw(t) {
     g.globalAlpha = 1;
   }
   g.restore();
-  if (state !== 'title' && state !== 'setup') drawHUD(t); else rr(0, 0, W, HUD, 0, '#2b2d42');
+  if (!attracting() && state !== 'setup') drawHUD(t); else rr(0, 0, W, HUD, 0, attracting() ? '#1d2033' : '#2b2d42');
   g.restore();
   if (state === 'count' && !(demo && TOUR[demo.i] && TOUR[demo.i].hold)) {
     const c = Math.ceil(COUNT - now), p = (COUNT - now) % 1;
@@ -1031,6 +1101,7 @@ function draw(t) {
   if (demo && (state === 'count' || state === 'play')) drawTour(t);
   if (state === 'count' && !demo && now < 0.5) { g.fillStyle = `rgba(29,32,51,${1 - now / 0.5})`; g.fillRect(0, 0, W, H + HUD); } // map fades in after READY
   if (state === 'title') drawTitle(t);
+  if (state === 'modes') drawModes(t);
   if (state === 'setup') drawSetup(t);
   if (state === 'over') drawOver(t);
 }
@@ -1038,6 +1109,7 @@ function draw(t) {
 // --- loop: fixed 60 Hz simulation, render every frame ---
 MAPS.forEach((_, m) => { setBlocks(m); mapImgs[m] = buildMap(m); });
 useMap(clamp(ls.get('kkMap', 0), 0, MAPS.length - 1));
+startAttract();
 let last = 0, acc = 0;
 (function loop(t) {
   acc += Math.min(0.1, (t - last) / 1000 || 0); last = t;
@@ -1061,7 +1133,7 @@ if (location.search.includes('test')) {
   eq('non-key copies', items.filter(i => i.type !== order.key).length, (order.items.length - 1) * 3);
   eq('carry cap', carryCap(), order.items.length + 2);
   for (const it of items) eq('item on road', onRoad(it.x, it.y, 19), true);
-  state = 'title';
+  state = 'title'; startAttract();
   window.KK_TEST = 'SELFTEST OK (' + ok.length + ' checks)';
   console.log(window.KK_TEST);
 }
