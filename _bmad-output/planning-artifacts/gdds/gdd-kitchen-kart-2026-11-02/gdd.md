@@ -129,7 +129,7 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
   - The aim is that no kart starts closer to the loot as a whole.
 - **Pickup:** drive within 22 px of a landed item. Duplicates are allowed.
 - **Carry limit:** the number of items in the order + 2, so 4 or 5 items. At the limit, driving over an item does nothing, and a "FULL" tag flashes over the kart for 0.5 s.
-- **Stacks carry over between orders.** Hoarded leftovers may help on the next order.
+- **Stacks carry over between orders, partly.** When a new order starts, any carried item the new order doesn't use poofs away. Leftovers it can use stay, so hoarding still pays.
 - **Delivery:**
   - Be within 30 px of the customer door while carrying every ordered item type.
   - Only one copy of each ordered type is removed from the stack; the rest stays.

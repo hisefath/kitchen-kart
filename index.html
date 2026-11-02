@@ -20,6 +20,8 @@ const ROUND = 90, COUNT = 3, TELE = 1.5, KEY_DELAY = 8, FADE_SHARE = 0.4, FADE_L
 const RAM_MIN = 2.5, SHIELD = 1, BOT_SPEED = 0.92, MAX_SPEED = 6, BOOST_MULT = 1.4;
 const PICK_R = 22, DOOR_R = 30, KART_R = 12, STEP = 1 / 60;
 
+// older Safari/Firefox lack roundRect: fall back to square corners
+if (!CanvasRenderingContext2D.prototype.roundRect) CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h) { this.rect(x, y, w, h); };
 const cv = document.getElementById('c'); let g = cv.getContext('2d');
 const W = 960, H = 640, HUD = 60;
 const TYPES = ['burger', 'fries', 'shake', 'ketchup'];
@@ -129,14 +131,16 @@ function padButton(i, n) {
   if (state === 'title') {
     if (!pads.includes(i) && pads.length < 2) { pads.push(i); sfx.join(); }
     else if (n === 9) begin('party');
-  } else if (state === 'over' && (n === 0 || n === 9)) rematch();
+    else if (n === 0) begin('bots');
+  } else if (state === 'over' && performance.now() - overAt < 1000) return; // A is also gas: don't skip results by accident
+  else if (state === 'over' && (n === 0 || n === 9)) rematch();
   else if (state === 'over' && n === 8) toMenu();
 }
 
 // --- audio: synthesized music + SFX ---
 let ac, master, noiseBuf, step = 0;
 function audio() {
-  if (ac) return;
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
   ac = new (window.AudioContext || window.webkitAudioContext)();
   master = ac.createGain(); master.gain.value = 0.6; master.connect(ac.destination);
   noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.3, ac.sampleRate);
@@ -186,7 +190,7 @@ const sfx = {
 
 // --- game state ---
 let state = 'title', cfg = { mode: 'bots', bots: 3, fill: true }, karts = [], items = [], order = null, now = 0;
-let parts = [], floaters = [], shake = 0, lastWinner = null, lastShop = null, entries = [], lastTick = 0, recordFlag = false;
+let overAt = 0, parts = [], floaters = [], shake = 0, lastWinner = null, lastShop = null, entries = [], lastTick = 0, recordFlag = false;
 const timeLeft = () => clamp(COUNT + ROUND - now, 0, ROUND);
 const tempo = () => timeLeft() < 18 ? 1.35 : timeLeft() < 45 ? 1.15 : 1;
 const clockColor = () => timeLeft() < 18 ? '#ff7b7b' : timeLeft() < 45 ? '#ffb36b' : '#ffffff';
@@ -227,6 +231,8 @@ function newOrder(first) {
   const shop = pick(shops.filter(s => s !== lastShop)); lastShop = shop;
   const land = first ? COUNT : now + TELE;
   order = { items: list, key: pick(list), shop, land, extraAt: land + KEY_DELAY, extraDone: false };
+  // leftovers the new order can't use poof away, so stacks never clog with junk
+  for (const k of karts) { const keep = k.stack.filter(t => list.includes(t)); if (keep.length < k.stack.length) puff(k.x, k.y - 26, '#ffffff', 6); k.stack = keep; }
   items = [];
   const N = karts.length, drops = [];
   for (const t of list) for (let c = t === order.key ? 1 : Math.max(2, N - 1); c > 0; c--) drops.push(t);
@@ -243,7 +249,7 @@ function update() {
   if (state === 'count') {
     const c = Math.ceil(COUNT - now);
     if (c !== lastTick) { lastTick = c; sfx.count(c <= 0); }
-    if (now >= COUNT) { state = 'play'; sfx.count(true); }
+    if (now >= COUNT) state = 'play';
     else return tickFx();
   }
   if (now >= COUNT + ROUND) return endRound();
@@ -256,7 +262,7 @@ function update() {
   }
   // faders: vanish, then re-telegraph somewhere else
   for (const it of items) if (it.life && now >= it.life) {
-    Object.assign(it, roadPoint(karts), { land: now + FADE_RELAND, life: now + FADE_RELAND + FADE_LIFE, fx: undefined });
+    Object.assign(it, roadPoint(karts), { land: now + FADE_RELAND, life: now + FADE_RELAND + FADE_LIFE, fx: undefined, landed: false });
   }
   for (const it of items) if (!it.landed && now >= it.land) { it.landed = true; if (it.fx === undefined) puff(it.x, it.y, '#ffffff', 6); }
 
@@ -318,7 +324,7 @@ function collideKarts() {
   }
 }
 function ram(r, v, nx, ny) {
-  sfx.ram(); shake = 0.15; r.ramCool = 3; // bots back off after a hit so carriers can escape puff((r.x + v.x) / 2, (r.y + v.y) / 2, '#ffffff', 10);
+  sfx.ram(); shake = 0.15; r.ramCool = 3; puff((r.x + v.x) / 2, (r.y + v.y) / 2, '#ffffff', 10); // ramCool: bots back off so carriers can escape
   if (v.shield > 0 || !v.stack.length) return;
   const type = v.stack.pop(); v.shield = SHIELD; sfx.drop();
   let p;
@@ -363,14 +369,15 @@ function botThink(k) {
   const need = order.items.filter(t => !k.stack.includes(t));
   k.target = null;
   if (!need.length) { k.target = order.shop.door; return; }
-  const victim = k.ramCool <= 0 && karts.find(o => o !== k && o.shield <= 0 && dist(o, k) < 90 && o.stack.some(t => need.includes(t)));
-  if (victim) { k.target = victim; return; }
   const free = carryCap() - k.stack.length;
-  const wanted = items.filter(it => need.includes(it.type) || (it.type === order.key && free >= 2 && dist(it, k) < 120));
+  const wanted = free <= 0 ? [] : items.filter(it => need.includes(it.type) || (it.type === order.key && free >= 2 && dist(it, k) < 120));
   // skip items another bot is closer to
   const mine = wanted.filter(it => !karts.some(o => o !== k && o.bot && o.target === it && dist(o, it) < dist(k, it)));
   const pool = mine.length ? mine : wanted;
-  if (pool.length) { k.target = pool.reduce((b, it) => dist(k, it) < dist(k, b) ? it : b); return; }
+  const near = pool.length && pool.reduce((b, it) => dist(k, it) < dist(k, b) ? it : b);
+  const victim = k.ramCool <= 0 && karts.find(o => o !== k && o.shield <= 0 && dist(o, k) < 90 && o.stack.some(t => need.includes(t)));
+  if (near && (!victim || dist(k, near) < dist(k, victim))) { k.target = near; return; }
+  if (victim) { k.target = victim; return; }
   // nothing left to grab: chase whoever holds what we need
   const holder = karts.find(o => o !== k && o.stack.some(t => need.includes(t)));
   k.target = holder || order.shop.door;
@@ -406,7 +413,7 @@ function botInput(k) {
 
 // --- round end + leaderboard entries ---
 function endRound() {
-  state = 'over'; sfx.end();
+  state = 'over'; overAt = performance.now(); sfx.end();
   const board = cfg.mode === 'bots' ? 'bots' : 'multi';
   const best = Math.max(0, ...karts.filter(k => k.human).map(k => k.score));
   const pb = ls.get('kkPB_' + board, 0);
@@ -421,10 +428,10 @@ function commit(e) { e.done = true; ls.set('kkName' + e.k.n, e.name); submitScor
 onkeydown = e => {
   audio();
   if (e.code.startsWith('Arrow') || e.code === 'Space' || e.code === 'Slash') e.preventDefault();
-  if (e.repeat) return;
+  if (e.repeat && e.code !== 'Backspace') return;
   keys[e.code] = true;
   if (state === 'title') {
-    if (e.code === 'Digit1') begin('bots');
+    if (e.code === 'Digit1' || e.code === 'Space' || e.code === 'Enter') begin('bots');
     else if (e.code === 'Digit2') begin('party');
     else if (e.code === 'ArrowLeft' || e.code === 'KeyA') { cfg.bots = Math.max(1, cfg.bots - 1); sfx.join(); }
     else if (e.code === 'ArrowRight' || e.code === 'KeyD') { cfg.bots = Math.min(3, cfg.bots + 1); sfx.join(); }
@@ -439,8 +446,9 @@ onkeydown = e => {
     else if (!en && e.code === 'Enter') rematch();
   } else if (e.code === 'Escape') { state = 'title'; loadBoards(); }
 };
-onkeyup = e => keys[e.code] = false;
+onkeyup = e => { keys[e.code] = false; if (!e.shiftKey) keys.ShiftLeft = keys.ShiftRight = false; };
 onblur = () => { for (const k in keys) keys[k] = false; };
+onpointerdown = () => audio();
 
 // --- effects ---
 function puff(x, y, color, n) { for (let i = 0; i < n; i++) { const a = rand(0, 7), s = rand(1, 3); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.4, max: 0.4, color, r: rand(2, 4) }); } }
