@@ -118,7 +118,7 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 
 - **Item types (4):** burger, fries, milkshake, ketchup.
 - **An order** is 2 or 3 distinct item types (50/50 chance), plus one customer shop picked at random from the 6 colored shops. It can't repeat the previous shop.
-- **Key item:** one item type per order, chosen at random. It's shown with a ★ on the HUD ticket.
+- **Key item:** one item type per order, chosen at random. It's shown as a gold tile on the HUD ticket.
 - **Copies on the map at order start:** with N karts in the round,
   - each non-key item type: N − 1 copies (at least 2);
   - the key item: 1 copy at first, then 1 more after **8 s** with a telegraph. With 4 karts, 2 copies arrive at 8 s.
@@ -189,6 +189,12 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 
 ### Vehicle Roster
 
+**The Garage.** This setup screen sits between the mode pick and every new match; rematches skip it.
+- Each human picks a **color** (6 options; a color another human already has is dimmed) and a **body**: Kart, Truck or Racer. Bodies are cosmetic only and share the same stats. Every body keeps headlights at the front.
+- Everyone sees the **map** picker, **Today's Menu** (the 4 items with names, plus the gold-tile = scarce legend) and the mode options: the number of rivals, or whether bots fill to 4.
+- **READY** (click, Enter/Space or pad A) loads the match. The map fades in, then each kart drops in one by one with a thunk.
+- Picks are saved per laptop.
+
 - Four karts with identical stats, told apart only by color and number:
   - P1 pink `#ff4f9a`
   - P2 blue `#3fd0ff`
@@ -199,7 +205,11 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 
 ### Track Design
 
-- **One arena map, "Toy Town."** It's a single-screen grid, not a lap track:
+- **Three maps** share the same road grid and differ in theme, layout and grip:
+  - **Toy Town:** the classic grid.
+  - **Sunset Plaza:** the two centre blocks are removed to make an open plaza, so there's more room to ram.
+  - **Frosty Lanes:** icy roads, with grip at 0.10 instead of 0.20.
+- The base layout, **Toy Town**, is a single-screen grid, not a lap track:
   - a 4×3 grid of 140×110 px blocks, with 80 px roads between them and a road ring around the edge;
   - 6 blocks are colored **customer shops**, each with a door marker on its road-facing side;
   - the other 6 blocks are props (toy houses and trees) that act as obstacles.
@@ -307,7 +317,7 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
   - fries: a red box with yellow sticks;
   - milkshake: a cup, straw and cherry;
   - ketchup: a red bottle.
-- **The HUD ticket** is a top-center paper ticket. It shows the item icons (★ marks the key item), the customer's color swatch and the door location.
+- **The HUD ticket** is a top-center paper ticket. Each element has its own slot, so nothing overlaps: the ORDER label, then one tile per item (the scarce key item gets a **gold tile**), then an arrow, then the customer's color pill.
 - **Juice:**
   - pickups pop at 1.3× scale and shrink back;
   - deliveries burst confetti in the customer's color and float a "+pts" label;
