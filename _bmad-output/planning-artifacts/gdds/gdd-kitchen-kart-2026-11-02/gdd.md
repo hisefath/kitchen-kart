@@ -107,7 +107,7 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 **Drift boost**
 
 - Hold **Drift** while turning at speed ≥ 3.0 px/f to drift. Grip drops to 4% per frame and sparks appear.
-- Drifting builds charge at 1 per second, capped at 1.2.
+- Drifting builds charge at 2 per second, capped at 1.2. One drifted 90° corner (about 0.3 s) earns a small boost.
 - Releasing Drift with charge ≥ 0.5 fires a boost. Top speed rises to 8.4 px/f (×1.4) and an extra forward impulse of 1.5 px/f is added. The boost lasts 0.3 s + 0.4 s × charge (0.5–0.78 s).
 - Releasing below 0.5 charge does nothing.
 - Spark color shows the charge: white below 0.5, orange at 0.5 or more, pink at 1.0 or more.
