@@ -34,7 +34,7 @@
    - and a few small ones
 
    It also exposed a design hole, now patched in the GDD: at the start of a new order, carried items the order can't use now vanish, so a stack can't fill up with junk and lock a kart out. Simulated rounds now average 6.3 deliveries.
-6. **Local git repo** with 2 commits. Nothing has been pushed anywhere.
+6. **Local git repo** with 3 commits. Nothing has been pushed anywhere.
 
 ## What needs you
 - **Play it with your hands.** I tested with scripts, not a keyboard, so handling feel and sound haven't been checked by ear. Run `python3 -m http.server 8124` in the project folder, then open http://localhost:8124.
