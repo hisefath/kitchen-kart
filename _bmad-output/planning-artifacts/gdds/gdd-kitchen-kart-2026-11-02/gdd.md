@@ -99,9 +99,11 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 | Acceleration | 0.28 px/f² forward; 0.18 px/f² reverse/brake |
 | Top speed | 6.0 px/f (360 px/s) |
 | Friction | velocity × 0.975 per frame |
-| Steering | 0.065 rad/f at full speed, scaled by forward speed / 3 (no turning in place) |
-| Grip | lateral velocity pulled toward the heading by 12% per frame (drifty but controllable) |
-| Wall/building hit | velocity × −0.4 (bounce); kart pushed out to 12 px clearance |
+| Steering (humans) | **Direction steering:** hold a direction and the kart turns toward it and drives; release to coast. Turn rate 0.12 rad/f below 3 px/f and 0.08 above, so a U-turn takes about 0.4 s. Brakes on sharp turns above 4 px/f. |
+| Lane assist (humans) | A straight press snaps to the nearest road going that way. If a building is in the way, the kart keeps rolling toward that road first (Pac-Man-style turn buffering). |
+| Steering (bots) | 0.07 rad/f, scaled by forward speed / 3 |
+| Grip | lateral velocity pulled toward the heading by 20% per frame |
+| Wall/building hit | **slide:** the velocity component into the wall is removed and the rest is kept at ×0.9; kart pushed out to 12 px clearance |
 | Kart collision radius | 12 px |
 
 **Drift boost**
@@ -165,10 +167,8 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 
 | Action | P1 (keyboard L) | P2 (keyboard R) | Gamepad (P3–P4, or any) |
 |---|---|---|---|
-| Accelerate | W | ↑ | A / RT |
-| Brake / reverse | S | ↓ | B / LT |
-| Steer | A / D | ← / → | Left stick / D-pad |
-| Drift (hold) | Left Shift | Right Shift or `/` | X / RB |
+| Drive in a direction | W A S D | ↑ ← ↓ → | Left stick / D-pad |
+| Drift (hold) | Left Shift | Right Shift or `/` | X / RB / RT |
 | Menu confirm | Space / Enter | Enter | A / Start |
 | Rematch on results | Space / Enter | Enter | A / Start |
 | Back to menu | Esc | Esc | Back / Select |
@@ -222,6 +222,11 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 
 ### Game Modes
 
+0. **Demo (How to Play):** a guided walkthrough from the title screen (button, or key 3 / H).
+   - **Explainer cards**, with the world paused and the target spotlit, one at a time: your kart, the order ticket and its ★ key item, the item landing shadows, then the customer ring. Space or a click advances; each card also moves on by itself after 6 s.
+   - **Autopilot:** the bot AI drives P1 while live callouts react to grabbing an item, completing the order and delivering. The rivals drive at ×0.7 and can't pick up items or ram, so the walkthrough always finishes.
+   - **Handoff:** "Your turn!" Pressing any drive key at any point takes over the wheel, and the rivals go back to normal.
+   - **Exit Demo**, with a button or Esc, works at any time. Demo scores never reach a leaderboard, and a rematch from its results starts a real Vs Bots round.
 1. **Vs Bots:** 1 human against 1–3 bots; the default is 3. Scores go to the **Vs Bots** board.
 2. **Party:** 2–4 humans on one laptop. P1 and P2 use the keyboard, and P3–P4 use gamepads.
    - "Fill with bots" defaults to on, bringing the round up to 4 karts.
@@ -414,7 +419,7 @@ Measured at the Wednesday playtest with 3 or more cohort mates:
 
 ## Assumptions and Dependencies
 
-- `[ASSUMPTION]` A hosted free-tier database (Supabase) provides public read and insert for the leaderboards. It needs the developer to create a project and paste its URL and anon key. Until then the game uses the local board.
+- **Leaderboards: a Google Sheet behind a Google Apps Script web app** (`leaderboard.gs`), not Supabase. It needs no new account. Until the web app URL is pasted into the game, the game uses the local board.
 - `[ASSUMPTION]` Micro Machines is the right feel reference for top-down toy-kart local play.
 - **The open leaderboard can be spammed.** That's acceptable for a jam. Mitigations: names are 1–12 characters, and scores above 5,000 are rejected as impossible.
 - **Hosting:** a static host such as GitHub Pages, Cloudflare Pages or Netlify, with a public URL.

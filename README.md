@@ -9,8 +9,8 @@ python3 -m http.server 8124
 Then open http://localhost:8124. Add `?test` to the URL to run the self-check; the result appears in the console and in `window.KK_TEST`.
 
 **Controls**
-- P1: WASD to drive, Left Shift to drift.
-- P2: arrow keys to drive, Right Shift or `/` to drift.
+- Hold a direction and the kart drives that way. P1 uses WASD with Left Shift to drift; P2 uses the arrow keys with Right Shift or `/` to drift.
+- Press `3` (or click HOW TO PLAY) on the title screen for a guided demo.
 - Gamepads: press any button on the title screen to join as P3 or P4.
 - On the title screen, press `1` for Vs Bots (A or D changes the bot count) or `2` for Party (F toggles bot fill).
 
@@ -19,12 +19,13 @@ Then open http://localhost:8124. Add `?test` to the URL to run the self-check; t
 2. In the repo, open Settings → Pages, choose "Deploy from branch", and pick `main` with `/ (root)`.
 3. The game goes live at `https://<you>.github.io/<repo>/`.
 
-## Turn on the online leaderboards (Supabase, free)
-1. Create a project at supabase.com.
-2. Run the SQL from `_bmad-output/planning-artifacts/game-architecture.md` in the project's SQL editor.
-3. Paste the Project URL and the anon public key into `SUPABASE_URL` and `SUPABASE_KEY` at the top of `index.html`.
+## Turn on the online leaderboards (Google Sheet, free)
+1. Create a new Google Sheet. It can be blank.
+2. Open Extensions → Apps Script, delete the starter code, paste in [`leaderboard.gs`](leaderboard.gs), and save.
+3. Choose Deploy → New deployment → gear icon → **Web app**. Set Execute as **Me** and Who has access **Anyone**, then Deploy and authorize.
+4. Copy the Web app URL (it ends in `/exec`) into `BOARD_URL` at the top of `index.html`.
 
-Until those are set, the leaderboards are saved per laptop.
+Scores then appear as rows in the sheet. Until it's set up, the leaderboards are saved per laptop.
 
 ## Design docs
 - Brief: `_bmad-output/planning-artifacts/briefs/brief-kitchen-kart-2026-11-02/brief.md`

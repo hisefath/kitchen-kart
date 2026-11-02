@@ -12,8 +12,8 @@ canvas{display:block;width:min(100vw,calc(100vh*960/700));height:auto;border-rad
 // Kitchen Kart. Every asset is generated in code: canvas drawing for art, WebAudio synthesis for sound.
 // Design source: _bmad-output/planning-artifacts/gdds/gdd-kitchen-kart-2026-11-02/gdd.md
 
-// --- online leaderboard: paste a Supabase project URL + anon key to go online (see game-architecture.md) ---
-const SUPABASE_URL = '', SUPABASE_KEY = '';
+// --- online leaderboard: paste your Google Apps Script web-app URL to go online (see leaderboard.gs) ---
+const BOARD_URL = '';
 
 // --- tuning knobs (GDD: Progression and Balance) ---
 const ROUND = 90, COUNT = 3, TELE = 1.5, KEY_DELAY = 8, FADE_SHARE = 0.4, FADE_LIFE = 5, FADE_RELAND = 1;
@@ -74,17 +74,16 @@ function fairSet(n) {
 // --- storage helpers (every access guarded: private windows can throw) ---
 const ls = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 
-// --- leaderboards: Supabase when configured, localStorage otherwise ---
+// --- leaderboards: a Google Sheet (via Apps Script web app) when configured, localStorage otherwise ---
 const boards = { multi: [], bots: [] };
-const online = !!(SUPABASE_URL && SUPABASE_KEY);
-const sbHeaders = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' };
+const online = !!BOARD_URL;
 const localTop = b => ls.get('kkBoard_' + b, []);
 async function loadBoards() {
   for (const b of ['multi', 'bots']) {
     boards[b] = localTop(b);
     if (!online) continue;
     try {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/scores?board=eq.${b}&select=name,score&order=score.desc&limit=10`, { headers: sbHeaders });
+      const r = await fetch(`${BOARD_URL}?board=${b}`);
       if (r.ok) boards[b] = await r.json();
     } catch {}
   }
@@ -93,7 +92,8 @@ async function submitScore(board, name, score) {
   name = name.slice(0, 12); score = Math.round(score);
   if (!name || score <= 0 || score > 5000) return;
   ls.set('kkBoard_' + board, [...localTop(board), { name, score }].sort((a, b) => b.score - a.score).slice(0, 10));
-  if (online) try { await fetch(`${SUPABASE_URL}/rest/v1/scores`, { method: 'POST', headers: { ...sbHeaders, Prefer: 'return=minimal' }, body: JSON.stringify({ board, name, score }) }); } catch {}
+  // text/plain + no-cors = a "simple" request Apps Script accepts without a CORS preflight
+  if (online) try { await fetch(BOARD_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ board, name, score }) }); } catch {}
   loadBoards();
 }
 loadBoards();
@@ -105,18 +105,36 @@ const KB = [
   { gas: ['ArrowUp'], brake: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], drift: ['ShiftRight', 'Slash'] },
 ];
 const anyKey = list => list.some(c => keys[c]) ? 1 : 0;
-const kbInput = m => ({ gas: anyKey(m.gas), brake: anyKey(m.brake), steer: anyKey(m.right) - anyKey(m.left), drift: !!anyKey(m.drift) });
+const kbInput = m => ({ x: anyKey(m.right) - anyKey(m.left), y: anyKey(m.brake) - anyKey(m.gas), drift: !!anyKey(m.drift) });
 let pads = []; // joined gamepad indices, in join order
 const padPrev = {};
 function padInput(i) {
   const p = navigator.getGamepads && navigator.getGamepads()[i];
-  if (!p) return { gas: 0, brake: 0, steer: 0, drift: false };
+  if (!p) return { x: 0, y: 0, drift: false };
   const b = n => p.buttons[n] ? (p.buttons[n].value || (p.buttons[n].pressed ? 1 : 0)) : 0;
-  let steer = Math.abs(p.axes[0] || 0) > 0.2 ? p.axes[0] : 0;
-  steer += b(15) - b(14);
-  return { gas: Math.max(b(0), b(7)), brake: Math.max(b(1), b(6)), steer: clamp(steer, -1, 1), drift: b(2) > 0.5 || b(5) > 0.5 };
+  const ax = n => Math.abs(p.axes[n] || 0) > 0.25 ? p.axes[n] : 0;
+  return { x: clamp(ax(0) + b(15) - b(14), -1, 1), y: clamp(ax(1) + b(13) - b(12), -1, 1), drift: b(2) > 0.5 || b(5) > 0.5 || b(7) > 0.5 };
 }
-const merge = list => list.reduce((a, i) => ({ gas: Math.max(a.gas, i.gas), brake: Math.max(a.brake, i.brake), steer: clamp(a.steer + i.steer, -1, 1), drift: a.drift || i.drift }), { gas: 0, brake: 0, steer: 0, drift: false });
+const merge = list => list.reduce((a, i) => ({ x: clamp(a.x + i.x, -1, 1), y: clamp(a.y + i.y, -1, 1), drift: a.drift || i.drift }), { x: 0, y: 0, drift: false });
+// easy steering: hold a direction and the kart turns toward it and drives; let go to coast
+function steerToward(k, inp) {
+  if (!inp.x && !inp.y) return { gas: 0, brake: 0, steer: 0, drift: inp.drift };
+  let want = Math.atan2(inp.y, inp.x);
+  // lane assist: a straight press snaps to the nearest road going that way; if a building is in the way,
+  // roll along toward that road first (Pac-Man style turn buffering)
+  const vert = !inp.x, horiz = !inp.y;
+  if (vert || horiz) {
+    const lanes = vert ? XS : YS, pos = vert ? k.x : k.y, sgn = vert ? Math.sign(inp.y) : Math.sign(inp.x);
+    const lane = lanes.reduce((b, l) => Math.abs(l - pos) < Math.abs(b - pos) ? l : b);
+    const blocked = vert ? inBlock(k.x, k.y + sgn * 48, 2) : inBlock(k.x + sgn * 48, k.y, 2);
+    if (Math.abs(lane - pos) < 30) want = vert ? Math.atan2(sgn * 80, lane - k.x) : Math.atan2(lane - k.y, sgn * 80);
+    else if (blocked) want = vert ? (lane > k.x ? 0 : Math.PI) : (lane > k.y ? Math.PI / 2 : -Math.PI / 2);
+  }
+  let diff = want - k.a;
+  diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+  const sp = Math.hypot(k.vx, k.vy);
+  return { gas: Math.abs(diff) < 1.3 ? 1 : 0.15, brake: Math.abs(diff) > 0.9 && sp > 4 ? 0.6 : 0, steer: clamp(diff * 3, -1, 1), drift: inp.drift };
+}
 function pollPads() { // edge-detected button presses → menu actions
   const gps = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const p of gps) {
@@ -190,7 +208,7 @@ const sfx = {
 
 // --- game state ---
 let state = 'title', cfg = { mode: 'bots', bots: 3, fill: true }, karts = [], items = [], order = null, now = 0;
-let overAt = 0, parts = [], floaters = [], shake = 0, lastWinner = null, lastShop = null, entries = [], lastTick = 0, recordFlag = false;
+let demo = null, overAt = 0, parts = [], floaters = [], shake = 0, lastWinner = null, lastShop = null, entries = [], lastTick = 0, recordFlag = false;
 const timeLeft = () => clamp(COUNT + ROUND - now, 0, ROUND);
 const tempo = () => timeLeft() < 18 ? 1.35 : timeLeft() < 45 ? 1.15 : 1;
 const clockColor = () => timeLeft() < 18 ? '#ff7b7b' : timeLeft() < 45 ? '#ffb36b' : '#ffffff';
@@ -206,9 +224,10 @@ function makeKart(n, human, inputs) {
 function begin(mode) {
   cfg.mode = mode;
   karts = [];
-  if (mode === 'bots') {
+  demo = mode === 'demo' ? { i: 0, t: 0, auto: true } : null;
+  if (mode === 'bots' || mode === 'demo') {
     karts.push(makeKart(0, true, () => merge([kbInput(KB[0]), kbInput(KB[1]), padInput(pads[0] ?? 0)])));
-    for (let i = 0; i < cfg.bots; i++) karts.push(makeKart(i + 1, false));
+    for (let i = 0; i < (demo ? 2 : cfg.bots); i++) karts.push(makeKart(i + 1, false));
   } else {
     karts.push(makeKart(0, true, () => kbInput(KB[0])), makeKart(1, true, () => kbInput(KB[1])));
     pads.slice(0, 2).forEach((p, i) => karts.push(makeKart(2 + i, true, () => padInput(p))));
@@ -223,8 +242,8 @@ function begin(mode) {
   newOrder(true);
   state = 'count';
 }
-const rematch = () => { submitEntries(); begin(cfg.mode); };
-const toMenu = () => { submitEntries(); state = 'title'; loadBoards(); };
+const rematch = () => { submitEntries(); begin(cfg.mode === 'demo' ? 'bots' : cfg.mode); };
+const toMenu = () => { submitEntries(); demo = null; state = 'title'; loadBoards(); };
 
 function newOrder(first) {
   const list = shuffle(TYPES).slice(0, Math.random() < 0.5 ? 2 : 3);
@@ -245,6 +264,10 @@ function newOrder(first) {
 // --- update ---
 function update() {
   if (state !== 'count' && state !== 'play') return;
+  if (demo && TOUR[demo.i] && TOUR[demo.i].hold) { // walkthrough card: world paused until read
+    if ((demo.t += STEP) > 6) nextTip();
+    return tickFx();
+  }
   now += STEP;
   if (state === 'count') {
     const c = Math.ceil(COUNT - now);
@@ -267,9 +290,16 @@ function update() {
   for (const it of items) if (!it.landed && now >= it.land) { it.landed = true; if (it.fx === undefined) puff(it.x, it.y, '#ffffff', 6); }
 
   for (const k of karts) {
-    const inp = k.bot ? botInput(k) : k.inputs();
+    let inp;
+    if (k.bot) inp = botInput(k);
+    else {
+      const raw = k.inputs();
+      if (demo && demo.auto && k.n === 0 && (raw.x || raw.y)) takeOver();
+      inp = demo && demo.auto && k.n === 0 ? botInput(k) : steerToward(k, raw);
+    }
     drive(k, inp);
   }
+  if (demo) tourTick();
   collideKarts();
   for (const k of karts) { pickup(k); deliver(k); }
   tickFx();
@@ -278,7 +308,7 @@ function update() {
 function drive(k, inp) {
   const dx = Math.cos(k.a), dy = Math.sin(k.a);
   const fwd = k.vx * dx + k.vy * dy, speed = Math.hypot(k.vx, k.vy);
-  k.a += inp.steer * 0.065 * (k.drifting ? 1.25 : 1) * clamp(fwd / 3, -1, 1);
+  k.a += inp.steer * (k.drifting ? 1.25 : 1) * (k.bot ? 0.07 * clamp(fwd / 3, -1, 1) : speed < 3 ? 0.12 : 0.08); // humans pivot quickly when slow
   k.vx += dx * (inp.gas * 0.28 - inp.brake * 0.18); k.vy += dy * (inp.gas * 0.28 - inp.brake * 0.18);
   // drift boost: hold drift while turning fast to charge, release to fire
   if (inp.drift && speed >= 3 && Math.abs(inp.steer) > 0.3) {
@@ -290,17 +320,17 @@ function drive(k, inp) {
     if (k.charge >= 0.5) { k.boost = 0.3 + 0.4 * k.charge; k.vx += dx * 1.5; k.vy += dy * 1.5; sfx.boost(); }
     k.charge = 0;
   }
-  const grip = k.drifting ? 0.04 : 0.12, c = Math.cos(k.a), s = Math.sin(k.a), f2 = k.vx * c + k.vy * s;
+  const grip = k.drifting ? 0.04 : 0.2, c = Math.cos(k.a), s = Math.sin(k.a), f2 = k.vx * c + k.vy * s;
   k.vx += (c * f2 - k.vx) * grip; k.vy += (s * f2 - k.vy) * grip;
   k.vx *= 0.975; k.vy *= 0.975;
-  const cap = MAX_SPEED * (k.boost > 0 ? BOOST_MULT : 1) * (k.bot ? BOT_SPEED : 1), sp = Math.hypot(k.vx, k.vy);
+  const cap = MAX_SPEED * (k.boost > 0 ? BOOST_MULT : 1) * (k.bot ? (demo && demo.auto ? 0.7 : BOT_SPEED) : 1), sp = Math.hypot(k.vx, k.vy);
   if (sp > cap) { k.vx *= cap / sp; k.vy *= cap / sp; }
   k.boost -= STEP; k.shield -= STEP; k.ramCool -= STEP; k.fullT -= STEP; k.pop -= STEP;
   if (k.boost > 0 && Math.random() < 0.5) parts.push({ x: k.x - dx * 14, y: k.y - dy * 14, vx: -dx + rand(-0.5, 0.5), vy: -dy + rand(-0.5, 0.5), life: 0.4, max: 0.4, color: '#ffffff', r: 5 });
   k.x += k.vx; k.y += k.vy;
   for (const b of blocks) {
     const cx = clamp(k.x, b.x, b.x + b.w), cy = clamp(k.y, b.y, b.y + b.h), d = Math.hypot(k.x - cx, k.y - cy);
-    if (d < KART_R) { const nx = (k.x - cx) / (d || 1), ny = (k.y - cy) / (d || 1); k.x = cx + nx * KART_R; k.y = cy + ny * KART_R; k.vx *= -0.4; k.vy *= -0.4; }
+    if (d < KART_R) { const nx = (k.x - cx) / (d || 1), ny = (k.y - cy) / (d || 1); k.x = cx + nx * KART_R; k.y = cy + ny * KART_R; const vn = k.vx * nx + k.vy * ny; if (vn < 0) { k.vx -= vn * nx; k.vy -= vn * ny; k.vx *= 0.9; k.vy *= 0.9; } } // slide along walls
   }
   if (k.x < KART_R || k.x > W - KART_R) { k.x = clamp(k.x, KART_R, W - KART_R); k.vx *= -0.5; }
   if (k.y < KART_R || k.y > H - KART_R) { k.y = clamp(k.y, KART_R, H - KART_R); k.vy *= -0.5; }
@@ -339,6 +369,7 @@ function ram(r, v, nx, ny) {
 }
 
 function pickup(k) {
+  if (demo && demo.auto && k.bot) return; // demo rivals just drive around so the walkthrough can't stall
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
     if (now < it.land || dist(k, it) > PICK_R) continue;
@@ -375,7 +406,7 @@ function botThink(k) {
   const mine = wanted.filter(it => !karts.some(o => o !== k && o.bot && o.target === it && dist(o, it) < dist(k, it)));
   const pool = mine.length ? mine : wanted;
   const near = pool.length && pool.reduce((b, it) => dist(k, it) < dist(k, b) ? it : b);
-  const victim = k.ramCool <= 0 && karts.find(o => o !== k && o.shield <= 0 && dist(o, k) < 90 && o.stack.some(t => need.includes(t)));
+  const victim = k.ramCool <= 0 && !(demo && demo.auto) && karts.find(o => o !== k && o.shield <= 0 && dist(o, k) < 90 && o.stack.some(t => need.includes(t)));
   if (near && (!victim || dist(k, near) < dist(k, victim))) { k.target = near; return; }
   if (victim) { k.target = victim; return; }
   // nothing left to grab: chase whoever holds what we need
@@ -418,7 +449,7 @@ function endRound() {
   const best = Math.max(0, ...karts.filter(k => k.human).map(k => k.score));
   const pb = ls.get('kkPB_' + board, 0);
   recordFlag = best > pb; if (recordFlag) ls.set('kkPB_' + board, best);
-  entries = karts.filter(k => k.human && k.score > 0).map(k => ({ k, board, name: ls.get('kkName' + k.n, ''), done: false }));
+  entries = demo ? [] : karts.filter(k => k.human && k.score > 0).map(k => ({ k, board, name: ls.get('kkName' + k.n, ''), done: false }));
 }
 const activeEntry = () => entries.find(e => !e.done);
 function submitEntries() { for (const e of entries) if (!e.done && e.name) commit(e); entries = []; }
@@ -433,6 +464,7 @@ onkeydown = e => {
   if (state === 'title') {
     if (e.code === 'Digit1' || e.code === 'Space' || e.code === 'Enter') begin('bots');
     else if (e.code === 'Digit2') begin('party');
+    else if (e.code === 'Digit3' || e.code === 'KeyH') begin('demo');
     else if (e.code === 'ArrowLeft' || e.code === 'KeyA') { cfg.bots = Math.max(1, cfg.bots - 1); sfx.join(); }
     else if (e.code === 'ArrowRight' || e.code === 'KeyD') { cfg.bots = Math.min(3, cfg.bots + 1); sfx.join(); }
     else if (e.code === 'KeyF') { cfg.fill = !cfg.fill; sfx.join(); }
@@ -444,11 +476,77 @@ onkeydown = e => {
     else if (en && e.code === 'Backspace') en.name = en.name.slice(0, -1);
     else if (en && /^[A-Za-z0-9_-]$/.test(e.key) && en.name.length < 12) en.name += e.key.toUpperCase();
     else if (!en && e.code === 'Enter') rematch();
-  } else if (e.code === 'Escape') { state = 'title'; loadBoards(); }
+  } else if (e.code === 'Escape') toMenu();
+  else if (demo && TOUR[demo.i] && TOUR[demo.i].hold && (e.code === 'Space' || e.code === 'Enter')) nextTip();
 };
 onkeyup = e => { keys[e.code] = false; if (!e.shiftKey) keys.ShiftLeft = keys.ShiftRight = false; };
 onblur = () => { for (const k in keys) keys[k] = false; };
-onpointerdown = () => audio();
+const BTN = { bots: [130, 196, 330, 156], party: [500, 196, 330, 156], demo: [330, 362, 300, 36], exit: [W - 178, H + HUD - 48, 164, 36] };
+const hit = (b, x, y) => x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3];
+onpointerdown = e => {
+  audio();
+  const r = cv.getBoundingClientRect(), x = (e.clientX - r.left) * cv.width / r.width, y = (e.clientY - r.top) * cv.height / r.height;
+  if (state === 'title') { if (hit(BTN.bots, x, y)) begin('bots'); else if (hit(BTN.party, x, y)) begin('party'); else if (hit(BTN.demo, x, y)) begin('demo'); }
+  else if (demo && (state === 'count' || state === 'play')) { if (hit(BTN.exit, x, y)) toMenu(); else if (TOUR[demo.i] && TOUR[demo.i].hold) nextTip(); }
+};
+
+// --- demo walkthrough: paused explainer cards, then autopilot with live callouts, then hand over the wheel ---
+const you = () => [{ x: karts[0].x, y: karts[0].y + HUD, r: 36 }];
+const door = () => [{ x: order.shop.door.x, y: order.shop.door.y + HUD, r: 48 }];
+const delivered = () => karts.some(k => k.deliveries > 0);
+const TOUR = [
+  { say: 'This is YOU: kart 1. Headlights and the arrow show which way you face.', focus: you, hold: true },
+  { say: 'The ORDER ticket. Collect every item on it. ★ marks the scarce one: only ONE is on the map at first!', focus: () => [{ x: W / 2 - 140, y: 4, w: 304, h: 52 }], hold: true },
+  { say: 'Items drop onto the road at these shadows. Plan your route before GO.', focus: () => items.map(it => ({ x: it.x, y: it.y + HUD, r: 24 })), hold: true },
+  { say: 'Then deliver to the shop with the spinning ring. First kart there scores.', focus: door, hold: true },
+  { say: 'GO! The autopilot drives you now. Drive THROUGH an item to grab it.', focus: you, until: () => karts[0].stack.length > 0 || delivered() },
+  { say: 'Got one! Items stack on top of your kart. Grab the rest of the order.', focus: you, until: () => order.items.every(t => karts[0].stack.includes(t)) || delivered() },
+  { say: 'Full order! Race to the ringed shop.', focus: door, until: delivered },
+  { say: 'Delivered! Fast deliveries and win streaks score more. Bump rivals at speed to knock their items loose. Hold Shift through a turn, release for a boost.', time: 7 },
+  { say: 'Your turn! Hold WASD or the arrow keys in the direction you want to go.', focus: you, until: () => !demo.auto },
+];
+function nextTip() { demo.i++; demo.t = 0; sfx.join(); }
+function takeOver() { // any drive key ends the autopilot; rivals get their normal speed and aggression back
+  demo.auto = false; demo.i = TOUR.length; karts.forEach(k => { k.ramCool = 0; k.target = null; });
+  float(karts[0].x, karts[0].y - 40, "YOU'RE DRIVING!", '#ffffff');
+}
+function tourTick() {
+  const tip = TOUR[demo.i];
+  if (!tip) return;
+  demo.t += STEP;
+  if ((tip.until && tip.until()) || (tip.time && demo.t > tip.time)) nextTip();
+}
+function wrap(str, width) {
+  const lines = [''];
+  for (const w of str.split(' ')) { const tryL = (lines[lines.length - 1] + ' ' + w).trim(); if (g.measureText(tryL).width > width) lines.push(w); else lines[lines.length - 1] = tryL; }
+  return lines;
+}
+function drawTour(t) {
+  const tip = TOUR[demo.i];
+  if (tip) {
+    const spots = tip.focus ? tip.focus() : [];
+    if (tip.hold) { // dim everything except the highlighted spots
+      g.beginPath(); g.rect(0, 0, W, H + HUD);
+      for (const sp of spots) if (sp.w) g.roundRect(sp.x, sp.y, sp.w, sp.h, 12); else { g.moveTo(sp.x + sp.r, sp.y); g.arc(sp.x, sp.y, sp.r, 0, Math.PI * 2); }
+      g.fillStyle = '#1d2033b8'; g.fill('evenodd');
+    }
+    g.strokeStyle = '#ffd23f'; g.lineWidth = 4;
+    const pulse = 4 + Math.sin(t / 120) * 4;
+    for (const sp of spots) { g.beginPath(); if (sp.w) g.roundRect(sp.x - pulse, sp.y - pulse, sp.w + pulse * 2, sp.h + pulse * 2, 14); else g.arc(sp.x, sp.y, sp.r + pulse, 0, Math.PI * 2); g.stroke(); }
+    g.font = 'bold 19px system-ui, sans-serif';
+    const lines = wrap(tip.say, 560), bh = 30 + lines.length * 26 + (tip.hold || demo.auto ? 22 : 0);
+    const low = spots.some(sp => sp.y > H + HUD - 200), by = low ? 80 : H + HUD - bh - 64;
+    rr(W / 2 - 310, by, 620, bh, 16, '#fff8ec');
+    g.strokeStyle = '#ffd23f'; g.lineWidth = 3; g.beginPath(); g.roundRect(W / 2 - 310, by, 620, bh, 16); g.stroke();
+    g.fillStyle = '#2b2d42'; g.textAlign = 'center';
+    lines.forEach((l, i) => g.fillText(l, W / 2, by + 34 + i * 26));
+    if (tip.hold) { g.font = '13px system-ui, sans-serif'; g.fillStyle = '#2b2d42aa'; g.fillText(`${demo.i + 1}/4 · SPACE or click to continue`, W / 2, by + bh - 12); }
+    if (demo.auto && !tip.hold) { g.font = 'bold 13px system-ui, sans-serif'; g.fillStyle = '#e63946'; g.fillText('AUTOPILOT · press any drive key to take over', W / 2, by + bh - 12); }
+  }
+  const [x, y, w, h] = BTN.exit;
+  rr(x, y, w, h, 18, '#1d2033dd'); g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.beginPath(); g.roundRect(x, y, w, h, 18); g.stroke();
+  g.fillStyle = '#fff'; g.font = 'bold 15px system-ui, sans-serif'; g.textAlign = 'center'; g.fillText('✕ EXIT DEMO (Esc)', x + w / 2, y + 23);
+}
 
 // --- effects ---
 function puff(x, y, color, n) { for (let i = 0; i < n; i++) { const a = rand(0, 7), s = rand(1, 3); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.4, max: 0.4, color, r: rand(2, 4) }); } }
@@ -541,16 +639,21 @@ function shade(hex, amt) {
 function drawKart(k, t) {
   if (k.shield > 0 && Math.floor(k.shield * 20) % 2) return drawStack(k);
   g.save(); g.translate(k.x, k.y);
-  g.save(); g.translate(3, 5); g.rotate(k.a); rr(-16, -11, 32, 22, 8, '#0000003a'); g.restore();
+  g.save(); g.translate(3, 5); g.rotate(k.a); rr(-17, -11, 36, 22, 8, '#0000003a'); g.restore();
   g.rotate(k.a);
-  for (const [wx, wy] of [[-11, -13], [-11, 9], [6, -13], [6, 9]]) rr(wx, wy, 9, 5, 2, '#222');
-  rr(-16, -11, 32, 22, 8, shade(k.color, -0.3));
-  rr(-16, -11, 32, 19, 8, k.color);
-  rr(3, -8, 8, 14, 3, '#e8f7ff');
+  if (k.human) { // ground arrow ahead of human karts so you always know which way is forward
+    g.beginPath(); g.moveTo(34, 0); g.lineTo(25, -7); g.lineTo(27, 0); g.lineTo(25, 7); g.closePath(); g.fillStyle = k.color + 'aa'; g.fill();
+  }
+  for (const [wx, wy] of [[-12, -13], [-12, 8], [5, -13], [5, 8]]) rr(wx, wy, 10, 5, 2, '#222');
+  rr(-19, -11, 5, 22, 2, shade(k.color, -0.45)); // rear spoiler
+  g.beginPath(); g.moveTo(-15, -10); g.lineTo(8, -10); g.quadraticCurveTo(19, -7, 19, 0); g.quadraticCurveTo(19, 7, 8, 10); g.lineTo(-15, 10); g.closePath();
+  g.fillStyle = k.color; g.fill(); g.strokeStyle = shade(k.color, -0.35); g.lineWidth = 2; g.stroke(); // body with a rounded nose
+  circle(15, -5, 2.6, '#fff6a0'); circle(15, 5, 2.6, '#fff6a0'); // headlights
+  circle(-4, 0, 6.5, '#ffffff'); rr(-1, -4, 4, 8, 2, '#1d2033'); // driver helmet + visor facing forward
   g.rotate(-k.a);
-  circle(-Math.cos(k.a) * 6, -Math.sin(k.a) * 6, 7, '#ffffff');
-  g.fillStyle = '#222'; g.font = 'bold 9px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(k.human ? k.n + 1 : 'C', -Math.cos(k.a) * 6, -Math.sin(k.a) * 6 + 0.5);
+  g.fillStyle = '#ffffff'; g.font = 'bold 10px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const bx = -Math.cos(k.a) * 26, by = -Math.sin(k.a) * 26 - 2; // number tag trails behind the kart
+  rr(bx - 9, by - 7, 18, 14, 6, '#1d2033cc'); g.fillText(k.human ? 'P' + (k.n + 1) : 'C', bx, by + 0.5);
   g.textBaseline = 'alphabetic';
   g.restore();
   drawStack(k);
@@ -648,18 +751,21 @@ function drawTitle(t) {
   text('Race toy karts for scarce food. Ram rivals. Deliver first.', W / 2, 130, 18, '#ffffff', 'center', false);
   ['burger', 'fries', 'shake', 'ketchup'].forEach((it, i) => drawItem(it, W / 2 - 75 + i * 50, 165 + Math.sin(t / 200 + i) * 4, 1.3));
   // menu cards
-  rr(130, 205, 330, 170, 16, '#ff4f9a'); rr(500, 205, 330, 170, 16, '#3fd0ff');
-  text('1  VS BOTS', 295, 245, 30, '#fff');
-  text(`◀  ${cfg.bots} bot${cfg.bots > 1 ? 's' : ''}  ▶`, 295, 285, 22, '#fff', 'center', false);
-  text('A / D to change', 295, 312, 14, '#ffffffcc', 'center', false);
-  text('WASD or arrows · Shift = drift', 295, 350, 15, '#fff', 'center', false);
-  text('2  PARTY', 665, 245, 30, '#fff');
+  rr(130, 196, 330, 156, 16, '#ff4f9a'); rr(500, 196, 330, 156, 16, '#3fd0ff');
+  text('1  VS BOTS', 295, 234, 30, '#fff');
+  text(`◀  ${cfg.bots} bot${cfg.bots > 1 ? 's' : ''}  ▶`, 295, 272, 22, '#fff', 'center', false);
+  text('A / D to change', 295, 298, 14, '#ffffffcc', 'center', false);
+  text('WASD or arrows · Shift = drift', 295, 334, 15, '#fff', 'center', false);
+  text('2  PARTY', 665, 234, 30, '#fff');
   const humans = 2 + Math.min(2, pads.length);
-  text(`${humans} players${cfg.fill ? ' + bots fill to 4' : ''}`, 665, 283, 18, '#fff', 'center', false);
-  text(`F: bots ${cfg.fill ? 'ON' : 'OFF'} · gamepad: press any button to join`, 665, 310, 13, '#ffffffcc', 'center', false);
-  text('P1 WASD+LShift · P2 arrows+RShift', 665, 350, 15, '#fff', 'center', false);
-  drawBoard('🏆 VS BOTS · ALL-TIME', boards.bots, 295, 430, null);
-  drawBoard('🏆 MULTIPLAYER · ALL-TIME', boards.multi, 665, 430, null);
+  text(`${humans} players${cfg.fill ? ' + bots fill to 4' : ''}`, 665, 270, 18, '#fff', 'center', false);
+  text(`F: bots ${cfg.fill ? 'ON' : 'OFF'} · gamepad: press any button to join`, 665, 296, 13, '#ffffffcc', 'center', false);
+  text('P1 WASD+LShift · P2 arrows+RShift', 665, 334, 15, '#fff', 'center', false);
+  const [dx, dy, dw, dh] = BTN.demo, glow = 0.5 + Math.sin(t / 250) * 0.5;
+  rr(dx - glow * 3, dy - glow * 3, dw + glow * 6, dh + glow * 6, 20, '#ffd23f55'); rr(dx, dy, dw, dh, 18, '#ffd23f');
+  text('▶  3  HOW TO PLAY (DEMO)', W / 2, dy + 25, 18, '#1d2033', 'center', false);
+  drawBoard('🏆 VS BOTS · ALL-TIME', boards.bots, 295, 440, null);
+  drawBoard('🏆 MULTIPLAYER · ALL-TIME', boards.multi, 665, 440, null);
   g.fillStyle = '#ffffff66'; g.font = '12px system-ui'; g.textAlign = 'center';
   g.fillText(online ? 'online leaderboards' : 'leaderboards saved on this laptop (online board not configured)', W / 2, H + HUD - 10);
 }
@@ -709,11 +815,12 @@ function draw(t) {
   g.restore();
   if (state !== 'title') drawHUD(t); else rr(0, 0, W, HUD, 0, '#2b2d42');
   g.restore();
-  if (state === 'count') {
+  if (state === 'count' && !(demo && TOUR[demo.i] && TOUR[demo.i].hold)) {
     const c = Math.ceil(COUNT - now), p = (COUNT - now) % 1;
     text(c, W / 2, H / 2 + HUD + 30, 120 + p * 40, '#fff');
     text('Plan your route!', W / 2, H / 2 + HUD + 80, 22, '#ffd23f');
   } else if (state === 'play' && now < COUNT + 0.8) text('GO!', W / 2, H / 2 + HUD + 30, 130, '#5fd068');
+  if (demo && (state === 'count' || state === 'play')) drawTour(t);
   if (state === 'title') drawTitle(t);
   if (state === 'over') drawOver(t);
 }
@@ -748,6 +855,6 @@ if (location.search.includes('test')) {
   console.log(window.KK_TEST);
 }
 // debug handle for playtesting
-window.KK = { get karts() { return karts; }, get items() { return items; }, get order() { return order; }, get state() { return state; }, set state(v) { state = v; }, begin, cfg, update, draw, get now() { return now; }, set now(v) { now = v; } };
+window.KK = { get karts() { return karts; }, get items() { return items; }, get order() { return order; }, get state() { return state; }, set state(v) { state = v; }, begin, cfg, update, draw, get demo() { return demo; }, get now() { return now; }, set now(v) { now = v; } };
 </script>
 </body></html>

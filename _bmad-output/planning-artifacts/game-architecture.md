@@ -20,21 +20,14 @@ Lean by design: a jam game, one developer, four days.
 | Bots | Waypoint graph on road intersections; BFS to the intersection nearest the target, then straight line | Grid city → BFS is exact enough and ~30 lines. |
 | Input | `keydown/keyup` map + Gamepad API polled each frame; each kart has an `input()` returning `{gas, brake, steer, drift}` (humans and bots share the interface) | Bots and humans drive through the same physics. |
 | Audio | WebAudio oscillators; music scheduler on `setInterval` reading a tempo multiplier | All synthesized, satisfies asset rule. |
-| Leaderboard | Supabase REST (`/rest/v1/scores`) via `fetch`, public anon key; table `scores(id, board text, name text, score int, created_at)`; RLS: insert + select for anon, check `score between 0 and 5000` and `char_length(name) between 1 and 12`. Fallback: `localStorage`. | No server to run; free tier; works from static host. |
+| Leaderboard | A Google Sheet behind a Google Apps Script web app (`leaderboard.gs`). `GET ?board=` returns the top 10 as JSON. `POST` sends a text/plain JSON body with `no-cors`, which avoids a CORS preflight. The script validates board, name (`[A-Za-z0-9_-]`, 1–12 characters, which also blocks formula injection) and score (1–5000). Fallback: `localStorage`. | No new account; the data is a sheet you can read and edit. |
 | Hosting | GitHub Pages (or Netlify drop) | Free public link. |
 
-## Supabase setup (user does once)
-```sql
-create table scores (id bigint generated always as identity primary key,
-  board text not null check (board in ('multi','bots')),
-  name text not null check (char_length(name) between 1 and 12),
-  score int not null check (score between 0 and 5000),
-  created_at timestamptz default now());
-alter table scores enable row level security;
-create policy "read" on scores for select using (true);
-create policy "insert" on scores for insert with check (true);
-```
-Then paste the project URL and anon key into `SUPABASE_URL` / `SUPABASE_KEY` at the top of `index.html`.
+## Leaderboard setup (user does once)
+1. Create a Google Sheet.
+2. Open Extensions → Apps Script and paste in `leaderboard.gs`.
+3. Choose Deploy → New deployment → Web app, set Execute as **Me** and Who has access **Anyone**, then authorize.
+4. Copy the `/exec` URL into `BOARD_URL` at the top of `index.html`.
 
 ## Performance budget
 ≤ 4 karts, ≤ 20 items, ≤ 200 particles; all drawn with primitive paths. No offscreen caching needed unless profiling shows > 8 ms/frame.
