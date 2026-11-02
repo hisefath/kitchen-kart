@@ -189,7 +189,11 @@ The loop repeats until the clock reaches 0. If the clock hits 0 mid-order, nobod
 
 ### Vehicle Roster
 
-**The Garage.** This setup screen sits between the mode pick and every new match; rematches skip it.
+**The Garage.** This sits between the mode pick and every new match; rematches skip it. It is four pages, one decision each, with a step tracker at the top, BACK and NEXT at the bottom, Enter for next and Esc for back:
+1. **Car:** pick a color and body.
+2. **Map:** pick a map.
+3. **Menu:** the 4 items, plus an annotated sample ticket.
+4. **Ready:** a summary, the rivals or bot-fill option, and a big READY button.
 - Each human picks a **color** (6 options; a color another human already has is dimmed) and a **body**: Kart, Truck or Racer. Bodies are cosmetic only and share the same stats. Every body keeps headlights at the front.
 - Everyone sees the **map** picker, **Today's Menu** (the 4 items with names, plus the gold-tile = scarce legend) and the mode options: the number of rivals, or whether bots fill to 4.
 - **READY** (click, Enter/Space or pad A) loads the match. The map fades in, then each kart drops in one by one with a thunk.

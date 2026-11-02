@@ -162,10 +162,13 @@ function padButton(i, n) {
   } else if (state === 'setup') {
     if (!pads.includes(i) && pads.length < 2 && cfg.mode === 'party') { pads.push(i); sfx.join(); return; }
     const slot = cfg.mode === 'bots' ? 0 : 2 + pads.indexOf(i);
-    if (n === 14 || n === 15) pickColor(slot, n === 15 ? 1 : -1);
-    else if (n === 12 || n === 13) pickStyle(slot, n === 13 ? 1 : -1);
-    else if (n === 0 || n === 9) ready();
-    else if (n === 1) state = 'title';
+    const lr = n === 15 ? 1 : n === 14 ? -1 : 0, ud = n === 13 ? 1 : n === 12 ? -1 : 0;
+    if (n === 0 || n === 9) nextStep();
+    else if (n === 1) backStep();
+    else if (cfg.step === 0 && lr) pickColor(slot, lr);
+    else if (cfg.step === 0 && ud) pickStyle(slot, ud);
+    else if (cfg.step === 1 && lr) cycleMap(lr);
+    else if (cfg.step === 3 && lr && cfg.mode === 'bots') { cfg.bots = clamp(cfg.bots + lr, 1, 3); sfx.join(); }
   } else if (state === 'over' && performance.now() - overAt < 1000) return; // A is also gas: don't skip results by accident
   else if (state === 'over' && (n === 0 || n === 9)) rematch();
   else if (state === 'over' && n === 8) toMenu();
@@ -269,7 +272,11 @@ function begin(mode) {
 const rematch = () => { submitEntries(); begin(cfg.mode === 'demo' ? 'bots' : cfg.mode); };
 const toMenu = () => { submitEntries(); demo = null; state = 'title'; loadBoards(); };
 const humanSlots = () => cfg.mode === 'bots' ? [0] : [0, 1, ...pads.slice(0, 2).map((_, i) => 2 + i)];
-function openSetup(mode) { cfg.mode = mode; state = 'setup'; sfx.join(); }
+function openSetup(mode) { cfg.mode = mode; cfg.step = 0; state = 'setup'; sfx.join(); }
+const STEPS = ['CAR', 'MAP', 'MENU', 'READY'];
+const nextStep = () => { if (cfg.step < STEPS.length - 1) { cfg.step++; sfx.join(); } else ready(); };
+const backStep = () => { if (cfg.step > 0) { cfg.step--; sfx.join(); } else state = 'title'; };
+const cycleMap = dir => { useMap((cfg.map + dir + MAPS.length) % MAPS.length); sfx.join(); };
 function ready() { ls.set('kkMap', cfg.map); cfg.cars.forEach((c, n) => ls.set('kkCar' + n, c)); begin(cfg.mode); }
 function pickColor(n, dir) { // skip colors another human already has
   const taken = humanSlots().filter(o => o !== n).map(o => cfg.cars[o].c);
@@ -501,16 +508,18 @@ onkeydown = e => {
     else if (e.code === 'Digit3' || e.code === 'KeyH') begin('demo');
     else if (e.code === 'KeyF') { cfg.fill = !cfg.fill; sfx.join(); }
   } else if (state === 'setup') {
-    const solo = cfg.mode === 'bots', c = e.code;
-    if (c === 'Enter' || c === 'Space') ready();
-    else if (c === 'Escape') state = 'title';
-    else if (c === 'KeyM' || c === 'Tab') { e.preventDefault(); useMap((cfg.map + 1) % MAPS.length); sfx.join(); }
-    else if (c === 'KeyA' || c === 'KeyD') pickColor(0, c === 'KeyD' ? 1 : -1);
-    else if (c === 'KeyW' || c === 'KeyS') pickStyle(0, c === 'KeyS' ? 1 : -1);
-    else if (c === 'ArrowLeft' || c === 'ArrowRight') pickColor(solo ? 0 : 1, c === 'ArrowRight' ? 1 : -1);
-    else if (c === 'ArrowUp' || c === 'ArrowDown') pickStyle(solo ? 0 : 1, c === 'ArrowDown' ? 1 : -1);
-    else if (solo && /^Digit[123]$/.test(c)) { cfg.bots = +c.slice(5); sfx.join(); }
-    else if (!solo && c === 'KeyF') { cfg.fill = !cfg.fill; sfx.join(); }
+    const solo = cfg.mode === 'bots', c = e.code, st = cfg.step;
+    const lr = c === 'KeyD' || c === 'ArrowRight' ? 1 : c === 'KeyA' || c === 'ArrowLeft' ? -1 : 0;
+    if (c === 'Enter' || c === 'Space') nextStep();
+    else if (c === 'Escape' || c === 'Backspace') backStep();
+    else if (st === 0 && (c === 'KeyA' || c === 'KeyD')) pickColor(0, c === 'KeyD' ? 1 : -1);
+    else if (st === 0 && (c === 'KeyW' || c === 'KeyS')) pickStyle(0, c === 'KeyS' ? 1 : -1);
+    else if (st === 0 && (c === 'ArrowLeft' || c === 'ArrowRight')) pickColor(solo ? 0 : 1, c === 'ArrowRight' ? 1 : -1);
+    else if (st === 0 && (c === 'ArrowUp' || c === 'ArrowDown')) pickStyle(solo ? 0 : 1, c === 'ArrowDown' ? 1 : -1);
+    else if (st === 1 && (lr || c === 'Tab' || c === 'KeyM')) { e.preventDefault(); cycleMap(lr || 1); }
+    else if (st === 3 && solo && /^Digit[123]$/.test(c)) { cfg.bots = +c.slice(5); sfx.join(); }
+    else if (st === 3 && solo && lr) { cfg.bots = clamp(cfg.bots + lr, 1, 3); sfx.join(); }
+    else if (st === 3 && !solo && c === 'KeyF') { cfg.fill = !cfg.fill; sfx.join(); }
   } else if (state === 'over') {
     const en = activeEntry();
     if (e.code === 'Space') rematch();
@@ -856,71 +865,117 @@ let clicks = []; // garage hit areas, rebuilt every frame
 const button = (x, y, w, h, fn) => clicks.push({ r: [x, y, w, h], fn });
 function drawSetup(t) {
   clicks = [];
-  g.drawImage(mapCache, 0, HUD); g.fillStyle = '#1d2033e0'; g.fillRect(0, 0, W, H + HUD);
-  text('GARAGE', W / 2, 46, 34, '#ffd23f');
-  g.fillStyle = '#ffffffaa'; g.font = '14px system-ui, sans-serif'; g.textAlign = 'center';
-  g.fillText(cfg.mode === 'bots' ? 'VS BOTS · pick your ride and map, then READY' : 'PARTY · everyone picks a ride, then READY', W / 2, 68);
-  // player cards
-  const slots = humanSlots(), cw = 210, gap = 14, x0 = (W - (slots.length * cw + (slots.length - 1) * gap)) / 2;
+  g.drawImage(mapCache, 0, HUD); g.fillStyle = '#1d2033f5'; g.fillRect(0, 0, W, H + HUD);
+  // step tracker: CAR · MAP · MENU · READY (click a done step to jump back)
+  STEPS.forEach((name, i) => {
+    const x = W / 2 - 236 + i * 120, cur = i === cfg.step, done = i < cfg.step;
+    rr(x, 18, 112, 34, 17, cur ? '#ffd23f' : done ? '#5fd068' : '#2b2d42');
+    text(`${done ? '✓' : i + 1}  ${name}`, x + 56, 41, 15, cur || done ? '#1d2033' : '#ffffff88', 'center', false);
+    if (done) button(x, 18, 112, 34, () => { cfg.step = i; sfx.join(); });
+  });
+  [setupCar, setupMap, setupMenu, setupReady][cfg.step](t);
+  // nav
+  rr(40, 620, 150, 54, 16, '#2b2d42'); text('◀ BACK', 115, 654, 18, '#fff', 'center', false); button(40, 620, 150, 54, backStep);
+  if (cfg.step < STEPS.length - 1) {
+    rr(W - 230, 614, 190, 62, 18, '#3a9d4a'); rr(W - 230, 614, 190, 57, 18, '#5fd068'); text('NEXT ▶', W - 135, 652, 24, '#fff');
+    button(W - 230, 614, 190, 62, nextStep);
+  }
+  g.fillStyle = '#ffffff77'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
+  g.fillText(`Enter / Space: ${cfg.step < STEPS.length - 1 ? 'next' : 'start'}  ·  Esc: back`, W / 2, 652);
+}
+function setupCar(t) {
+  text('CHOOSE YOUR RIDE', W / 2, 104, 34, '#ffd23f');
+  const slots = humanSlots(), cw = 220, gap = 14, x0 = (W - (slots.length * cw + (slots.length - 1) * gap)) / 2;
   slots.forEach((n, i) => {
-    const x = x0 + i * (cw + gap), y = 80, car = cfg.cars[n], color = CAR_COLORS[car.c];
-    rr(x, y, cw, 222, 16, '#2b2d42'); g.strokeStyle = color; g.lineWidth = 3; g.beginPath(); g.roundRect(x, y, cw, 222, 16); g.stroke();
-    text('P' + (n + 1), x + 20, y + 28, 18, color, 'left', false);
-    g.save(); g.translate(x + cw / 2, y + 78); g.scale(2.6, 2.6); g.rotate(-0.35 + Math.sin(t / 600 + i) * 0.12); drawCar(color, car.s); g.restore();
-    // body style picker
-    const sy = y + 132;
-    text('◀', x + 30, sy + 6, 20, '#fff', 'center', false); button(x + 10, sy - 14, 40, 30, () => pickStyle(n, -1));
-    text(STYLES[car.s], x + cw / 2, sy + 6, 18, '#fff', 'center', false);
-    text('▶', x + cw - 30, sy + 6, 20, '#fff', 'center', false); button(x + cw - 50, sy - 14, 40, 30, () => pickStyle(n, 1));
-    // color swatches (taken ones dimmed)
+    const x = x0 + i * (cw + gap), y = 134, car = cfg.cars[n], color = CAR_COLORS[car.c];
+    rr(x, y, cw, 400, 18, '#2b2d42'); g.strokeStyle = color; g.lineWidth = 4; g.beginPath(); g.roundRect(x, y, cw, 400, 18); g.stroke();
+    text('P' + (n + 1), x + cw / 2, y + 36, 24, color, 'center', false);
+    g.save(); g.translate(x + cw / 2, y + 140); g.scale(3.6, 3.6); g.rotate(-0.35 + Math.sin(t / 600 + i) * 0.12); drawCar(color, car.s); g.restore();
+    const sy = y + 262;
+    text('◀', x + 32, sy + 7, 24, '#fff', 'center', false); button(x + 8, sy - 18, 48, 36, () => pickStyle(n, -1));
+    text(STYLES[car.s], x + cw / 2, sy + 7, 22, '#fff', 'center', false);
+    text('▶', x + cw - 32, sy + 7, 24, '#fff', 'center', false); button(x + cw - 56, sy - 18, 48, 36, () => pickStyle(n, 1));
     const taken = slots.filter(o => o !== n).map(o => cfg.cars[o].c);
     CAR_COLORS.forEach((c, ci) => {
-      const cx = x + 30 + ci * 30, cy = y + 172;
+      const cx = x + 35 + ci * 30, cy = y + 322;
       g.globalAlpha = taken.includes(ci) ? 0.25 : 1; circle(cx, cy, 11, c); g.globalAlpha = 1;
       if (ci === car.c) { g.strokeStyle = '#fff'; g.lineWidth = 3; g.beginPath(); g.arc(cx, cy, 15, 0, 7); g.stroke(); }
       if (!taken.includes(ci)) button(cx - 14, cy - 14, 28, 28, () => { cfg.cars[n].c = ci; sfx.join(); });
     });
-    g.fillStyle = '#ffffff88'; g.font = '12px system-ui, sans-serif'; g.textAlign = 'center';
-    g.fillText(n === 0 ? (cfg.mode === 'bots' ? 'A/D color · W/S body' : 'A/D color · W/S body') : n === 1 ? '←/→ color · ↑/↓ body' : 'D-pad: color & body', x + cw / 2, y + 208);
+    g.fillStyle = '#ffffff88'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText(n === 0 ? 'A/D color · W/S body' : n === 1 ? '←/→ color · ↑/↓ body' : 'D-pad: color & body', x + cw / 2, y + 376);
   });
-  // maps
-  text('MAP', 40, 334, 16, '#ffd23f', 'left', false);
+  if (cfg.mode === 'party') { g.fillStyle = '#ffffff88'; g.font = '13px system-ui'; g.textAlign = 'center'; g.fillText('Got a gamepad? Press any button on it to join.', W / 2, 570); }
+}
+function setupMap(t) {
+  text('PICK A MAP', W / 2, 104, 34, '#ffd23f');
   MAPS.forEach((M, m) => {
-    const x = 40 + m * 300, y = 344, sel = m === cfg.map;
-    rr(x, y, 280, 172, 14, sel ? '#ffd23f' : '#2b2d42');
-    g.drawImage(mapImgs[m], x + 10, y + 10, 180, 120);
-    g.fillStyle = sel ? '#1d2033' : '#ffffff'; g.textAlign = 'left'; g.font = 'bold 16px system-ui, sans-serif'; g.fillText(M.name, x + 12, y + 150);
-    g.font = '12px system-ui, sans-serif'; wrap(M.blurb, 76).forEach((l, li) => g.fillText(l, x + 198, y + 30 + li * 16));
-    g.fillText(m === 0 ? 'grip: normal' : m === 1 ? 'grip: normal' : 'grip: ICY', x + 198, y + 122);
-    button(x, y, 280, 172, () => { useMap(m); sfx.join(); });
+    const x = 25 + m * 310, y = 140, sel = m === cfg.map;
+    rr(x, y, 290, 400, 18, sel ? '#ffd23f' : '#2b2d42');
+    g.drawImage(mapImgs[m], x + 10, y + 10, 270, 180);
+    g.fillStyle = sel ? '#1d2033' : '#ffffff'; g.textAlign = 'center'; g.font = 'bold 24px system-ui, sans-serif'; g.fillText(M.name, x + 145, y + 232);
+    g.font = '16px system-ui, sans-serif'; wrap(M.blurb, 250).forEach((l, li) => g.fillText(l, x + 145, y + 268 + li * 22));
+    rr(x + 70, y + 330, 150, 34, 17, sel ? '#1d203322' : '#ffffff14');
+    g.fillStyle = sel ? '#1d2033' : '#ffffff'; g.font = 'bold 14px system-ui, sans-serif'; g.fillText(M.grip < 0.15 ? '❄ ICY GRIP' : 'NORMAL GRIP', x + 145, y + 352);
+    button(x, y, 290, 400, () => { useMap(m); sfx.join(); });
   });
-  g.fillStyle = '#ffffff88'; g.font = '12px system-ui'; g.textAlign = 'right'; g.fillText('M: next map', W - 40, 334);
-  // today's menu
-  text("TODAY'S MENU", 40, 548, 16, '#ffd23f', 'left', false);
-  ['burger', 'fries', 'shake', 'ketchup'].forEach((it, i) => {
-    const x = 70 + i * 76;
-    circle(x, 584, 22, '#fff8ec'); drawItem(it, x, 582, 1.1);
-    g.fillStyle = '#fff'; g.font = 'bold 12px system-ui, sans-serif'; g.textAlign = 'center'; g.fillText(['Burger', 'Fries', 'Shake', 'Ketchup'][i], x, 622);
+  g.fillStyle = '#ffffff88'; g.font = '13px system-ui'; g.textAlign = 'center'; g.fillText('←/→ or A/D to switch · click a map', W / 2, 570);
+}
+function setupMenu(t) {
+  text("TODAY'S MENU", W / 2, 104, 34, '#ffd23f');
+  g.fillStyle = '#ffffffcc'; g.font = '16px system-ui, sans-serif'; g.textAlign = 'center';
+  g.fillText('Every order asks for 2 or 3 of these. Grab them, then deliver to the colored shop.', W / 2, 134);
+  [['burger', 'Burger'], ['fries', 'Fries'], ['shake', 'Shake'], ['ketchup', 'Ketchup']].forEach(([it, name], i) => {
+    const x = 105 + i * 200, y = 160;
+    rr(x, y, 150, 170, 18, '#2b2d42');
+    circle(x + 75, y + 70, 46, '#fff8ec'); drawItem(it, x + 75, y + 66 + Math.sin(t / 300 + i) * 3, 2.3);
+    text(name, x + 75, y + 150, 20, '#fff', 'center', false);
   });
-  rr(40, 636, 38, 40, 9, '#ffd23f'); drawItem('shake', 59, 654, 0.82);
-  g.fillStyle = '#ffffffcc'; g.font = '13px system-ui, sans-serif'; g.textAlign = 'left';
-  g.fillText('Orders ask for 2-3 of these. A GOLD tile on the ticket', 88, 652); g.fillText('marks the scarce item: only one on the map!', 88, 670);
-  // mode options
+  // a sample ticket, explained part by part
+  text('READING THE ORDER TICKET', W / 2, 382, 16, '#ffd23f', 'center', false);
+  const tx = W / 2 - 165;
+  rr(tx, 400, 330, 48, 12, '#fff8ec');
+  g.fillStyle = '#2b2d42'; g.font = 'bold 12px system-ui'; g.textAlign = 'left'; g.fillText('ORDER', tx + 12, 429);
+  ['burger', 'shake', 'fries'].forEach((it, i) => { const cx = tx + 66 + i * 42; rr(cx, 404, 38, 40, 9, i === 1 ? '#ffd23f' : '#efe5d2'); drawItem(it, cx + 19, 422, 0.82); });
+  g.fillStyle = '#2b2d42'; g.font = 'bold 20px system-ui'; g.textAlign = 'center'; g.fillText('→', tx + 205, 431);
+  rr(tx + 220, 408, 104, 32, 8, SHOP_COLORS[2][1]); g.fillStyle = '#fff'; g.font = 'bold 14px system-ui'; g.fillText('PURPLE', tx + 272, 429);
+  // callouts below, never on top of the ticket
+  g.strokeStyle = '#ffd23f'; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(tx + 127, 448); g.lineTo(tx + 60, 490); g.stroke();
+  g.beginPath(); g.moveTo(tx + 272, 448); g.lineTo(tx + 330, 490); g.stroke();
+  g.fillStyle = '#fff'; g.font = 'bold 15px system-ui, sans-serif';
+  g.textAlign = 'right'; g.fillText('GOLD tile = the scarce item.', tx + 70, 510); g.font = '14px system-ui'; g.fillText('Only ONE on the map at first. Race for it!', tx + 70, 530);
+  g.textAlign = 'left'; g.font = 'bold 15px system-ui, sans-serif'; g.fillText('Deliver to this shop.', tx + 300, 510); g.font = '14px system-ui'; g.fillText('It has a spinning ring on the map.', tx + 300, 530);
+}
+function setupReady(t) {
+  text('READY?', W / 2, 104, 40, '#ffd23f');
+  // your ride(s)
+  const slots = humanSlots();
+  rr(60, 140, 410, 240, 18, '#2b2d42'); text('YOUR RIDE' + (slots.length > 1 ? 'S' : ''), 265, 172, 16, '#ffd23f', 'center', false);
+  slots.forEach((n, i) => {
+    const x = 265 + (i - (slots.length - 1) / 2) * 95, car = cfg.cars[n];
+    g.save(); g.translate(x, 270); g.scale(slots.length > 2 ? 1.8 : 2.4, slots.length > 2 ? 1.8 : 2.4); g.rotate(-0.3); drawCar(CAR_COLORS[car.c], car.s); g.restore();
+    text('P' + (n + 1), x, 350, 16, CAR_COLORS[car.c], 'center', false);
+  });
+  button(60, 140, 410, 240, () => { cfg.step = 0; sfx.join(); });
+  // map
+  rr(490, 140, 410, 240, 18, '#2b2d42'); text('MAP', 695, 172, 16, '#ffd23f', 'center', false);
+  g.drawImage(mapCache, 575, 186, 240, 160); text(MAPS[cfg.map].name, 695, 368, 16, '#fff', 'center', false);
+  button(490, 140, 410, 240, () => { cfg.step = 1; sfx.join(); });
+  // match option
   if (cfg.mode === 'bots') {
-    text('RIVALS', 420, 572, 15, '#ffd23f', 'left', false);
-    [1, 2, 3].forEach(b => { const x = 420 + (b - 1) * 46; rr(x, 584, 38, 38, 10, cfg.bots === b ? '#ffd23f' : '#2b2d42'); text(b, x + 19, 610, 18, cfg.bots === b ? '#1d2033' : '#fff', 'center', false); button(x, 584, 38, 38, () => { cfg.bots = b; sfx.join(); }); });
+    text('RIVALS', W / 2 - 90, 425, 16, '#ffd23f', 'center', false);
+    [1, 2, 3].forEach(b => { const x = W / 2 - 40 + (b - 1) * 50; rr(x, 400, 42, 42, 12, cfg.bots === b ? '#ffd23f' : '#2b2d42'); text(b, x + 21, 428, 20, cfg.bots === b ? '#1d2033' : '#fff', 'center', false); button(x, 400, 42, 42, () => { cfg.bots = b; sfx.join(); }); });
   } else {
-    text('BOTS FILL TO 4', 420, 572, 15, '#ffd23f', 'left', false);
-    rr(420, 584, 90, 38, 10, cfg.fill ? '#5fd068' : '#2b2d42'); text(cfg.fill ? 'ON' : 'OFF', 465, 610, 18, cfg.fill ? '#1d2033' : '#fff', 'center', false);
-    button(420, 584, 90, 38, () => { cfg.fill = !cfg.fill; sfx.join(); });
-    g.fillStyle = '#ffffff88'; g.font = '12px system-ui'; g.textAlign = 'left'; g.fillText('gamepads: press a button to join', 420, 640);
+    text('BOTS FILL TO 4', W / 2 - 70, 427, 16, '#ffd23f', 'center', false);
+    rr(W / 2 + 30, 400, 90, 42, 12, cfg.fill ? '#5fd068' : '#2b2d42'); text(cfg.fill ? 'ON' : 'OFF', W / 2 + 75, 428, 20, cfg.fill ? '#1d2033' : '#fff', 'center', false);
+    button(W / 2 + 30, 400, 90, 42, () => { cfg.fill = !cfg.fill; sfx.join(); });
   }
-  // READY
-  const pulse = 1 + Math.sin(t / 200) * 0.03, bx = W - 300, by = 572;
-  g.save(); g.translate(bx + 130, by + 40); g.scale(pulse, pulse);
-  rr(-130, -40, 260, 80, 20, '#3a9d4a'); rr(-130, -40, 260, 74, 20, '#5fd068'); text('READY!', 0, 12, 34, '#fff');
-  g.restore(); button(bx, by, 260, 80, ready);
-  g.fillStyle = '#ffffff88'; g.font = '12px system-ui'; g.textAlign = 'center'; g.fillText('Enter / Space · Esc: back', bx + 130, by + 100);
+  // the big button
+  const pulse = 1 + Math.sin(t / 200) * 0.03;
+  g.save(); g.translate(W / 2, 520); g.scale(pulse, pulse);
+  rr(-170, -50, 340, 100, 26, '#3a9d4a'); rr(-170, -50, 340, 92, 26, '#5fd068'); text('READY!', 0, 14, 44, '#fff');
+  g.restore(); button(W / 2 - 170, 470, 340, 100, ready);
 }
 
 function drawOver(t) {
