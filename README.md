@@ -1,5 +1,9 @@
 # Kitchen Kart
 
+**Play it:** https://hisefath.github.io/kitchen-kart/
+
+![Kitchen Kart gameplay](media/kitchen-kart.gif)
+
 A top-down toy-kart delivery racer for Gauntlet Game Week. It's one `index.html` file with no build step and no asset files: the art is drawn in code and the audio is synthesized.
 
 ## Play locally
